@@ -26,10 +26,13 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
   // publish 由 1 秒定时器驱动，把选定 tick 刷成公式键与来源元数据。
   const baseQuotes=store.baseQuotes();
   const aggregator=quotes??new Quotes({baseQuotes,onSwitch:(e)=>store.appendSwitchLog({...e,reason:'来源切换'})});
-  let stopSina=null,stopTimer=null;
+  let stopSina=null,stopTimer=null,started=false;
   const start=()=>{
+    if(started)return stopTimer;   // 幂等：重复 start 不重复建连，避免旧 WebSocket/轮询/定时器泄漏
+    started=true;
     if(!quotes){
       aggregator.attach(createRtj({map:baseQuotes.map((b)=>{const s=(b.sources||[]).find((x)=>x.sourceId==='rtj');return {symbol:b.symbol,code:s?.code??null,kind:s?.kind??'plain'};})}));
+      aggregator.sourceName.set('sina','新浪'); // sina 走直连注入，注册来源名供前台展示
       stopSina=attachSina({baseQuotes,onQuote:(t)=>aggregator.selector.ingest(t.symbol,'sina',t)});
     }
     const timer=setInterval(()=>aggregator.publish(),1000);timer.unref();stopTimer=()=>clearInterval(timer);return stopTimer;

@@ -9,6 +9,7 @@ export function createRtj({map=[],onQuote=()=>{},onFailure=()=>{},onStatus=()=>{
   const feed=new QuoteFeed({map});
   const buf={};   // symbol -> 跨消息累积字段，凑齐买卖价后归一化输出
   let handleQuote=onQuote;   // start() 注入的回调优先于构造参数
+  let handleStatus=onStatus;
   feed.on('tick',(tick)=>{
     const prev=buf[tick.symbol];
     if(prev&&prev.time>tick.time)return;   // 忽略更旧的乱序消息，防止旧值覆盖新值
@@ -19,11 +20,12 @@ export function createRtj({map=[],onQuote=()=>{},onFailure=()=>{},onStatus=()=>{
       catch{/* 字段不足时等待下一 tick */}
     }
   });
-  feed.on('status',()=>onStatus(feed.sourceStatus));
+  feed.on('status',()=>handleStatus(feed.sourceStatus));
   return {
     id:'rtj',name:'融通金',
     start(handlers={}){
       if(handlers.onQuote)handleQuote=handlers.onQuote;
+      if(handlers.onStatus)handleStatus=handlers.onStatus;
       feed.start();
       return ()=>feed.stop();
     },
