@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Store } from '../src/store.mjs';
+
+test('首次初始化迁移默认三元目录进 SQLite', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lcjy-catalog-'));
+  try {
+    const store = new Store(dir);
+    const sources = store.sources();
+    const baseQuotes = store.baseQuotes();
+    const categories = store.categories();
+    assert.ok(sources.some((s) => s.id === 'rtj'));
+    assert.ok(sources.some((s) => s.id === 'sina'));
+    assert.ok(baseQuotes.some((b) => b.symbol === '黄金'));
+    // 业务品类来自 defaults.json rows
+    assert.ok(categories.some((c) => c.name === '黄金'));
+    assert.ok(categories.some((c) => c.name === '港金'));
+    const hk = categories.find((c) => c.name === '港金');
+    assert.ok(hk.buyFormula.includes('37.429'));
+    store.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('港金公式再次打开后持久化', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lcjy-persist-'));
+  try {
+    let store = new Store(dir);
+    store.saveBaseQuotes(store.baseQuotes().map((b) => b.symbol === '美元兑港元' ? { ...b, decimals: 5 } : b));
+    store.close();
+    store = new Store(dir);
+    assert.equal(store.baseQuotes().find((b) => b.symbol === '美元兑港元').decimals, 5);
+    store.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
