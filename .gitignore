@@ -1,0 +1,11 @@
+node_modules/
+data/
+.env
+*.log
+qa/
+
+# Local captures and review artifacts
+qa-mobile.png
+original-config.json
+public/assets/reference*.css
+

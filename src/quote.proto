@@ -1,0 +1,15 @@
+syntax = "proto3";
+message QuotationMsg {
+  int32 msgid=1; sint32 seq=2; QuotationRequest request=4;
+  repeated QuotationResponse response=5; string jsonReq=8; string jsonResp=9; string errMsg=17;
+}
+message QuotationRequest { repeated string codes=1; repeated int32 freq=2; int32 subscribeFlag=4; AuthReq auth=5; }
+message AuthReq {string apptype=1; bytes token=2;}
+message AuthResp {bytes serverInfo=1;}
+message QuotationResponse {repeated QuotationField quotation=1; int64 earliestfreq=2; sint32 errCode=3; AuthResp auth=5; TradeStatus tradeStatus=6; string msg=16;}
+message TradeStatus {int32 tradeStatus=1; repeated string codes=2; repeated string commodites=3; repeated string markets=4; int64 quotetime=5;}
+message QuotationField {
+ string code=1; int32 freq=2; fixed64 quoteTime=3; int64 volume=4; int64 freqTime=5;
+ double turnOver=6; Realtime rt=7; double open=8; double high=9; double low=10; double close=11; double posi=12; double preClose=13;
+}
+message Realtime { double last=1; repeated double askPrice=2; repeated int64 askVol=3; repeated double bidPrice=4; repeated int64 bidVol=5; int32 tag=6; double posiDelta=7; double highLimit=8; double lowLimit=9; int64 tickVolume=10; double updown=11; double updownRate=12; double average=13; int32 tradeday=14; }
