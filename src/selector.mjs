@@ -2,7 +2,6 @@
 // 数据源选择器：为每个基础行情维护各来源的 healthy/stale/disconnected 状态，
 // 按 priority 升序挑选健康来源。主源失效立即切换；主源恢复后连续 becomeHealthyAfter 次
 // 有效更新才切回。全部失效时回退到最后有效 tick（last-known）。来源切换通过 onSwitch 写运行日志。
-// end:aigc.
 export const HEALTHY = 'healthy', STALE = 'stale', DISCONNECTED = 'disconnected', DISABLED = 'disabled';
 
 export class Selector {
@@ -108,3 +107,4 @@ export class Selector {
     return { sourceId: sel.sourceId, mode: sel.mode, status: entry?.status ?? DISCONNECTED, err: entry?.err ?? null };
   }
 }
+// end:aigc.
