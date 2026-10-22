@@ -41,6 +41,7 @@ export class Quotes {
       });
     }
   }
-  stop() { for (const a of this.adapters.values()) a.stop?.(); this.adapters.clear(); }
+  // 优先用 start() 返回的清理函数（适配器可只返回清理函数不实现 stop 方法），回落到 stop()
+  stop() { for (const a of this.adapters.values()) (a._stop ?? a.stop)?.(); this.adapters.clear(); }
 }
 // end:aigc.

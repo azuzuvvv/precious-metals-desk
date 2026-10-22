@@ -34,6 +34,7 @@ test('聚合把选定 tick 转成公式键与来源元数据', () => {
   q.publish(1700000000000);
   assert.equal(q.prices.get('【#美元指数#回购价】').value, '103.5');
   assert.equal(q.prices.get('【#美元指数#销售价】').value, '103.55');
+  assert.equal(q.prices.get('【#美元指数#最高价】'), undefined); // tick 缺失的字段不写键
   const meta = q.meta.get('美元指数');
   assert.equal(meta.sourceId, 'sina');
   assert.equal(meta.mode, 'primary');
