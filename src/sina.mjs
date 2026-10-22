@@ -1,41 +1,56 @@
 // start:aigc.
-// 新浪补充行情源：负责融通金缺失的品种（美元指数、沪金/沪银主力）。
-// 数据写入 feed.prices（键格式与融通金一致：【#品种#字段】），公式引擎无需感知来源。
-import {FIELD_LABELS} from './catalog.mjs';
+// 新浪适配器：配置驱动（由目录的 sina 源 code 决定拉取哪些 symbol）。
+// 字段映射集中在一个表，新增品种只需加表项。fx 外汇字段按 [1]=买 [2]=卖 [4]=高 [5]=低 假设，
+// 港汇字段由 scripts/verify-live.mjs 探针在实盘校验。
+import { normalizeTick } from './adapter.mjs';
 
-const SINA_URL='https://hq.sinajs.cn/list=DINIW,nf_AU0,nf_AG0';
-// 新浪返回 GBK 编码，数字段均为 ASCII，latin1 解码即可
-const num=v=>{const n=Number(v);return Number.isFinite(n)&&n!==0?n:null;};
+const SINA_QMAP = {
+  DINIW: { buy: 1, sell: 2, high: 6, low: 7 },             // 美元指数
+  nf_AU0: { mid: [6, 7], sell: 7, high: 3, low: 4 },       // 沪金主力：回购=买卖中间价
+  nf_AG0: { mid: [6, 7], sell: 7, high: 3, low: 4 },       // 沪银主力
+  fx_susdhkd: { buy: 1, sell: 2, high: 4, low: 5 },        // 美元兑港元（字段以探针实测为准）
+};
+const number = (v) => { const n = Number(v); return Number.isFinite(n) && n !== 0 ? n : null; };
 
-export function attachSina(feed,{intervalMs=15000}={}){
-  const set=(name,field,value,time)=>{if(value==null)return;
-    feed.prices.set(`【#${name}#${FIELD_LABELS[field]}】`,{value:String(value),time});};
+export function buildSinaQuotes(baseQuotes) {
+  const out = {};
+  for (const bq of baseQuotes) {
+    const s = (bq.sources || []).find((x) => x.sourceId === 'sina');
+    if (s?.code && s.code !== '__NONE__') out[s.code] = { symbol: bq.symbol };
+  }
+  return out;
+}
 
-  async function poll(){
-    try{
-      const r=await fetch(SINA_URL,{headers:{Referer:'https://finance.sina.com.cn'},signal:AbortSignal.timeout(8000)});
-      const text=Buffer.from(await r.arrayBuffer()).toString('latin1');
-      const now=Date.now();
-      for(const m of text.matchAll(/hq_str_(\w+)="([^"]*)"/g)){
-        const f=m[2].split(',');
-        if(m[1]==='DINIW'){
-          // DINIW 字段：[0]时间 [1]买入 [2]卖出 [5]开盘 [6]最高 [7]最低 [8]最新
-          set('美元指数','buy',num(f[1]),now);set('美元指数','sell',num(f[2]),now);
-          set('美元指数','high',num(f[6]),now);set('美元指数','low',num(f[7]),now);
-        }else if(m[1]==='nf_AU0'||m[1]==='nf_AG0'){
-          // 期货字段：[3]最高 [4]最低 [6]买价 [7]卖价
-          // 与原站口径对齐：回购=买卖中间价，销售=卖价（实测原站 886.44/886.50 即 mid/ask）
-          const name=m[1]==='nf_AU0'?'沪金主力':'沪银主力';
-          const bid=num(f[6]),ask=num(f[7]);
-          set(name,'buy',bid!=null&&ask!=null?(bid+ask)/2:null,now);
-          set(name,'sell',ask,now);
-          set(name,'high',num(f[3]),now);set(name,'low',num(f[4]),now);
-        }
-      }
-    }catch{/* 拉取失败保留旧值，由 60 秒过期机制统一标记 */}
+export function parseSinaText(text, quotes) {
+  const ticks = [];
+  for (const m of text.matchAll(/hq_str_(\w+)="([^"]*)"/g)) {
+    const q = quotes[m[1]]; if (!q) continue;
+    const map = SINA_QMAP[m[1]]; if (!map) continue;
+    const f = m[2].split(',');
+    const raw = {};
+    if (map.buy != null) raw.buy = number(f[map.buy]);
+    if (map.sell != null) raw.sell = number(f[map.sell]);
+    if (map.mid) { const a = number(f[map.mid[0]]), b = number(f[map.mid[1]]); if (a != null && b != null) raw.buy = (a + b) / 2; }
+    if (map.high != null) raw.high = number(f[map.high]);
+    if (map.low != null) raw.low = number(f[map.low]);
+    try { ticks.push(normalizeTick(q.symbol, { ...raw, time: Date.now() })); } catch { /* 字段不足跳过 */ }
+  }
+  return ticks;
+}
+
+export function attachSina({ baseQuotes, onQuote, intervalMs = 15000 }) {
+  const quotes = buildSinaQuotes(baseQuotes);
+  const codes = Object.keys(quotes);
+  const url = `https://hq.sinajs.cn/list=${codes.join(',')}`;
+  async function poll() {
+    try {
+      const r = await fetch(url, { headers: { Referer: 'https://finance.sina.com.cn' }, signal: AbortSignal.timeout(8000) });
+      const text = Buffer.from(await r.arrayBuffer()).toString('latin1');
+      for (const t of parseSinaText(text, quotes)) onQuote(t);
+    } catch { /* 拉取失败保留旧值，由超时机制标记 stale */ }
   }
   void poll();
-  const timer=setInterval(poll,intervalMs);timer.unref?.();
-  return ()=>clearInterval(timer);
+  const timer = setInterval(poll, intervalMs); timer.unref?.();
+  return () => clearInterval(timer);
 }
 // end:aigc.
