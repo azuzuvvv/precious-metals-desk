@@ -88,7 +88,7 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
         // 基础行情保存需重启后适配器按新目录建连。来源密钥只回是否已配置，永不回明文。
         if(path==='/api/admin/sources'&&req.method==='GET'){json(res,200,{sources:store.sources().map((s)=>({...s,hasSecret:store.hasSourceSecret(s.id)}))});return;}
         if(path==='/api/admin/switch-logs'&&req.method==='GET'){json(res,200,{entries:store.switchLogs()});return;}
-        if(path==='/api/admin/catalog'&&req.method==='GET'){json(res,200,{version:store.config().version,sources:store.sources(),baseQuotes:store.baseQuotes(),categories:store.categories()});return;}
+        if(path==='/api/admin/catalog'&&req.method==='GET'){json(res,200,{version:store.config().version,sources:store.sources().map((s)=>({...s,hasSecret:store.hasSourceSecret(s.id)})),baseQuotes:store.baseQuotes(),categories:store.categories()});return;}
         if(path==='/api/admin/catalog'&&req.method==='POST'){
           const data=await body(req);stillAuthorized();
           if(!Number.isInteger(data.expectedVersion))throw error(400,'缺少目录版本');
