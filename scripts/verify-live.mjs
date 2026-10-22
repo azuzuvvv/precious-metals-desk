@@ -17,6 +17,8 @@ try{
 }finally{feed.stop();}
 
 // start:aigc. 港汇字段探针：打印 fx_susdhkd 原始字段，供确认字段映射。 end:aigc.
-const _hkR = await fetch('https://hq.sinajs.cn/list=fx_susdhkd', { headers: { Referer: 'https://finance.sina.com.cn' } });
-const _hkT = Buffer.from(await _hkR.arrayBuffer()).toString('latin1');
-console.log('[港汇探针]', _hkT);
+try {
+  const _hkR = await fetch('https://hq.sinajs.cn/list=fx_susdhkd', { headers: { Referer: 'https://finance.sina.com.cn' } });
+  const _hkT = Buffer.from(await _hkR.arrayBuffer()).toString('latin1');
+  console.log('[港汇探针]', _hkT);
+} catch (e) { console.warn('[港汇探针] 拉取失败：', e.message); }

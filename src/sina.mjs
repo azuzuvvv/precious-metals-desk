@@ -41,10 +41,12 @@ export function parseSinaText(text, quotes) {
 export function attachSina({ baseQuotes, onQuote, intervalMs = 15000 }) {
   const quotes = buildSinaQuotes(baseQuotes);
   const codes = Object.keys(quotes);
+  if (!codes.length) return () => {};   // 无新浪品种可拉取时不开轮询
   const url = `https://hq.sinajs.cn/list=${codes.join(',')}`;
   async function poll() {
     try {
       const r = await fetch(url, { headers: { Referer: 'https://finance.sina.com.cn' }, signal: AbortSignal.timeout(8000) });
+      // 新浪返回 GBK 编码，数字段均为 ASCII，latin1 解码即可
       const text = Buffer.from(await r.arrayBuffer()).toString('latin1');
       for (const t of parseSinaText(text, quotes)) onQuote(t);
     } catch { /* 拉取失败保留旧值，由超时机制标记 stale */ }
