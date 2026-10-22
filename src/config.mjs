@@ -62,3 +62,54 @@ export function snapshot(config,feed,{all=false,now=Date.now(),staleMs=60000}={}
   });
   return {serverTime:new Date(now).toISOString(),configVersion:config.version,brand:config.brand,schedule:config.schedule,status:{connected:feed.connected,lastMessageAt:feed.lastMessageAt||null,sourceStatus:feed.sourceStatus||'等待行情',shopOpen:isShopOpen(config,new Date(now))},rows};
 }
+
+// start:aigc.
+// 三元目录校验：品类公式可引用已登记基础行情 symbol、其它业务品类名，或软引用（未知键，运行时空值）。
+// 软引用允许是业务要求——铑金公式引用未登记的公斤条，需与线上行为等价（销售价为空）。
+// detectCycles 只对「品类→品类」画边；引用目标是基础 symbol 时不画边（基础 symbol 优先于同名品类），
+// 避免直连透传品类（如品类「黄金」引用【#黄金#回购价】）被误判自环。
+export function detectCycles(categories, baseSymbols = new Set()) {
+  const byName = new Map(categories.map((c) => [c.name, c]));
+  const edges = new Map(categories.map((c) => [c.name, []]));
+  for (const c of categories) {
+    for (const key of ['buyFormula', 'sellFormula', 'highFormula', 'lowFormula']) {
+      const expr = (c[key] ?? '').trim(); if (!expr) continue;  // 空公式跳过：references('') 会因 tokens 非空校验抛错
+      for (const ref of references(expr)) {
+        const target = ref.slice(2, ref.lastIndexOf('#'));
+        // 目标是基础 symbol 时不画边：解析为基础行情而非品类
+        if (byName.has(target) && !baseSymbols.has(target)) edges.get(c.name).push(target);
+      }
+    }
+  }
+  const visiting = new Set(), done = new Set();
+  const visit = (node, path) => {
+    if (done.has(node)) return;
+    if (visiting.has(node)) throw new Error(`循环引用：${[...path, node].join('->')}`);
+    visiting.add(node);
+    for (const next of edges.get(node) ?? []) visit(next, [...path, node]);
+    visiting.delete(node); done.add(node);
+  };
+  for (const name of edges.keys()) visit(name, []);
+}
+
+export function validateCatalog({ sources = [], baseQuotes = [], categories = [] }) {
+  if (!Array.isArray(baseQuotes)) throw new Error('基础行情格式无效');
+  if (!Array.isArray(categories)) throw new Error('业务品类格式无效');
+  const seenIds = new Set();
+  const symbols = new Set(baseQuotes.map((b) => b.symbol));
+  for (const c of categories) {
+    if (!c || typeof c.id !== 'string' || !/^[\w-]{1,40}$/.test(c.id) || seenIds.has(c.id)) throw new Error('品类编号无效或重复');
+    seenIds.add(c.id);
+    if (typeof c.name !== 'string' || !c.name.trim() || c.name.length > 40) throw new Error('品类名称无效');
+    if (!Number.isInteger(c.decimals) || c.decimals < 0 || c.decimals > 6) throw new Error('品类精度无效');
+    if (!['half-up', 'floor', 'ceil'].includes(c.rounding)) throw new Error('品类舍入方式无效');
+    for (const key of ['buyFormula', 'sellFormula', 'highFormula', 'lowFormula']) {
+      if (typeof c[key] !== 'string' || c[key].length > 500) throw new Error(`${c.name}公式无效`);
+      const expr = c[key].trim(); if (!expr) continue;
+      compile(expr);   // 语法与静态除零校验；未知引用为软引用，不在此报错
+    }
+  }
+  detectCycles(categories, symbols);
+  return { sources, baseQuotes, categories };
+}
+// end:aigc.
