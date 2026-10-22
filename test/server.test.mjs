@@ -5,10 +5,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {request} from 'node:http';
 import {createApp} from '../src/server.mjs';
+// start:aigc.
+import {Quotes} from '../src/quotes.mjs';
+// end:aigc.
 
 test('new admin is isolated, authenticated, versioned and persistent',async()=>{
-  const dir=mkdtempSync(join(tmpdir(),'lcjy-test-'));const feed={connected:false,prices:new Map(),sourceStatus:'offline'};
-  let app=await createApp({dataDir:dir,feed});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
+  // start:aigc.
+  const dir=mkdtempSync(join(tmpdir(),'lcjy-test-'));const quotes=new Quotes(); // 注入聚合层实例：不构建真实适配器、不连网
+  // end:aigc.
+  let app=await createApp({dataDir:dir,quotes});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
   let base=`http://127.0.0.1:${app.server.address().port}`;
   let cookie='',csrf='';
   const call=async(path,data,headers={})=>{const res=await fetch(base+path,{method:data?'POST':'GET',headers:{origin:base,...(data?{'content-type':'application/json'}:{}),...(cookie?{cookie}:{}),...(csrf?{'x-csrf-token':csrf}:{}),...headers},body:data?JSON.stringify(data):undefined});if(res.headers.get('set-cookie'))cookie=res.headers.get('set-cookie').split(';')[0];return {status:res.status,data:await res.json()};};
@@ -31,7 +36,9 @@ test('new admin is isolated, authenticated, versioned and persistent',async()=>{
     assert.equal((await call('/api/admin/config',{config,expectedVersion:save.data.version})).status,400);
     assert.equal((await call('/api/admin/config')).data.config.rows[0].sellFormula,'【#黄金#销售价】+4');
     assert.equal((await call('/api/admin/audit')).data.entries.length,1);
-    await app.close(); app=await createApp({dataDir:dir,feed});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${app.server.address().port}`;
+    // start:aigc.
+    await app.close(); app=await createApp({dataDir:dir,quotes});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${app.server.address().port}`;
+    // end:aigc.
     cookie='';csrf=''; const login=await call('/api/admin/login',{password:'StrongPassword12!'});assert.equal(login.status,200);csrf=login.data.csrf;
     assert.equal((await call('/api/admin/config')).data.config.rows[0].sellFormula,'【#黄金#销售价】+4');
     assert.equal((await call('/api/admin/password',{oldPassword:'wrong',newPassword:'ReplacementPass12!'})).status,403);

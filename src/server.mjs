@@ -6,9 +6,10 @@ import {randomBytes,timingSafeEqual} from 'node:crypto';
 import {Store,passwordHash,passwordMatches,validPassword} from './store.mjs';
 import {validateConfig,snapshot} from './config.mjs';
 import {CATALOG} from './catalog.mjs';
-import {QuoteFeed} from './feed.mjs';
 // start:aigc.
 import {attachSina} from './sina.mjs';
+import {Quotes} from './quotes.mjs';
+import {createRtj} from './rtj.mjs';
 // end:aigc.
 
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'..');
@@ -16,9 +17,24 @@ const same=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)
 const error=(status,message)=>Object.assign(new Error(message),{status});
 async function body(req){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>256000)throw error(413,'请求内容过大');chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw error(400,'JSON格式无效');}}
 
-export async function createApp({dataDir=join(project,'data'),feed=new QuoteFeed(),publicOrigin=process.env.PUBLIC_ORIGIN||null}={}){
+export async function createApp({dataDir=join(project,'data'),quotes=null,publicOrigin=process.env.PUBLIC_ORIGIN||null}={}){
   const store=new Store(dataDir),sessions=new Map(),attempts=new Map();
   let closing=false;
+  // start:aigc.
+  // 组装聚合层：默认按 SQLite 目录构建真实适配器（生产 main 调 start() 时才连网）；
+  // 注入聚合层实例（测试）时不连网。来源切换写运行日志（switch_log 表）。
+  // publish 由 1 秒定时器驱动，把选定 tick 刷成公式键与来源元数据。
+  const baseQuotes=store.baseQuotes();
+  const aggregator=quotes??new Quotes({baseQuotes,onSwitch:(e)=>store.appendSwitchLog({...e,reason:'来源切换'})});
+  let stopSina=null,stopTimer=null;
+  const start=()=>{
+    if(!quotes){
+      aggregator.attach(createRtj({map:baseQuotes.map((b)=>{const s=(b.sources||[]).find((x)=>x.sourceId==='rtj');return {symbol:b.symbol,code:s?.code??null,kind:s?.kind??'plain'};})}));
+      stopSina=attachSina({baseQuotes,onQuote:(t)=>aggregator.selector.ingest(t.symbol,'sina',t)});
+    }
+    const timer=setInterval(()=>aggregator.publish(),1000);timer.unref();stopTimer=()=>clearInterval(timer);return stopTimer;
+  };
+  // end:aigc.
   const json=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));};
   const cookie=(req)=>req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('lcjy_session='))?.slice(13);
   const session=(req)=>{const id=cookie(req),s=sessions.get(id);if(!s||s.expires<Date.now()){if(id)sessions.delete(id);return null;}return s;};
@@ -38,7 +54,9 @@ export async function createApp({dataDir=join(project,'data'),feed=new QuoteFeed
         if(req.headers.origin!==origin)throw error(403,'只允许同站操作');
         if(!req.headers['content-type']?.startsWith('application/json'))throw error(415,'需要JSON请求');
       }
-      if(path==='/api/quotes'&&req.method==='GET'){json(res,200,snapshot(store.config(),feed));return;}
+      // start:aigc.
+      if(path==='/api/quotes'&&req.method==='GET'){json(res,200,snapshot({...store.config(),categories:store.categories()},aggregator));return;} // 前台快照：品类读 categories 表，价格/来源读聚合层
+      // end:aigc.
       if(path==='/api/admin/session'&&req.method==='GET'){const s=session(req);json(res,200,{authenticated:!!s,needsSetup:!store.hasAdmin(),csrf:s?.csrf||null});return;}
       if(path==='/api/admin/setup'&&req.method==='POST'){
         rateLimit(req);if(store.hasAdmin())throw error(409,'管理员已经初始化');const data=await body(req);
@@ -53,8 +71,12 @@ export async function createApp({dataDir=join(project,'data'),feed=new QuoteFeed
         const s=session(req);if(!s)throw error(401,'请先登录新盘后台');
         const stillAuthorized=()=>{if(session(req)!==s)throw error(401,'会话已失效，请重新登录');};
         if(req.method==='POST'&&!same(req.headers['x-csrf-token'],s.csrf))throw error(403,'页面凭据已过期，请重新登录');
-        if(path==='/api/admin/config'&&req.method==='GET'){const config=store.config();json(res,200,{config,version:config.version,sourceCatalog:CATALOG.map(r=>({name:r.name,code:r.code,available:!!r.code&&[...feed.prices.keys()].some(k=>k.startsWith(`【#${r.name}#`))}))});return;}
-        if(path==='/api/admin/preview'&&req.method==='POST'){const data=await body(req);stillAuthorized();json(res,200,snapshot(validateConfig(data.config),feed,{all:true}));return;}
+        // start:aigc.
+        if(path==='/api/admin/config'&&req.method==='GET'){const config=store.config();json(res,200,{config,version:config.version,sourceCatalog:CATALOG.map(r=>({name:r.name,code:r.code,available:!!r.code&&[...aggregator.prices.keys()].some(k=>k.startsWith(`【#${r.name}#`))}))});return;}
+        // end:aigc.
+        // start:aigc.
+        if(path==='/api/admin/preview'&&req.method==='POST'){const data=await body(req);stillAuthorized();json(res,200,snapshot(validateConfig(data.config),aggregator,{all:true}));return;}
+        // end:aigc.
         if(path==='/api/admin/config'&&req.method==='POST'){const data=await body(req);stillAuthorized();if(!Number.isInteger(data.expectedVersion))throw error(400,'缺少配置版本');const config=store.save(validateConfig(data.config),data.expectedVersion);json(res,200,{config,version:config.version});return;}
         if(path==='/api/admin/audit'&&req.method==='GET'){json(res,200,{entries:store.audit()});return;}
         if(path==='/api/admin/export'&&req.method==='GET'){res.setHeader('content-disposition','attachment; filename="lcjy-config.json"');json(res,200,store.config());return;}
@@ -71,14 +93,18 @@ export async function createApp({dataDir=join(project,'data'),feed=new QuoteFeed
     }catch(e){if(!res.headersSent)json(res,e.status||400,{error:e.message||'请求失败'});else res.end();}
   });
   server.requestTimeout=15000;server.headersTimeout=10000;
-  return {server,store,feed,async close(){if(closing)return;closing=true;clearInterval(cleanup);feed.stop?.();await new Promise(r=>{server.close(r);server.closeAllConnections();});store.close();}};
+  return {server,store,quotes:aggregator,start,async close(){if(closing)return;closing=true;clearInterval(cleanup);
+    // start:aigc.
+    stopSina?.();aggregator.stop();stopTimer?.();
+    // end:aigc.
+    await new Promise(r=>{server.close(r);server.closeAllConnections();});store.close();}};
 }
 
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const app=await createApp();const port=Number(process.env.PORT||3188),host=process.env.HOST||'127.0.0.1';
-  app.server.listen(port,host,()=>{console.log(`报价盘 http://${host}:${port}/\n独立后台 http://${host}:${port}/admin`);if(!app.store.hasAdmin())console.log(`首次设置令牌位于 ${join(app.store.dir,'setup-token.txt')}，请在新后台设置密码。`);app.feed.start();
+  app.server.listen(port,host,()=>{console.log(`报价盘 http://${host}:${port}/\n独立后台 http://${host}:${port}/admin`);if(!app.store.hasAdmin())console.log(`首次设置令牌位于 ${join(app.store.dir,'setup-token.txt')}，请在新后台设置密码。`);
   // start:aigc.
-  attachSina(app.feed); // 新浪补充源：美元指数、沪金/沪银主力
+  app.start(); // 组装生产适配器（融通金+新浪）并启动 publish 定时器
   // end:aigc.
   });
   for(const sig of ['SIGINT','SIGTERM'])process.on(sig,async()=>{await app.close();process.exit(0);});

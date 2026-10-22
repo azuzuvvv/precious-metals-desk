@@ -6,15 +6,19 @@ const defaults=JSON.parse(readFileSync(new URL('../src/defaults.json',import.met
 // start:aigc.
 import { Quotes } from '../src/quotes.mjs';
 // end:aigc.
+// start:aigc.
 test('default gold pricing follows the source and supports a configured sales spread',()=>{
   const cfg=validateConfig(structuredClone(defaults));const now=Date.now();
-  const feed={connected:true,prices:new Map([['【#黄金#回购价】',{value:'882.73',time:now}],['【#黄金#销售价】',{value:'885.73',time:now}],['【#黄金#最高价】',{value:'892.08',time:now}],['【#黄金#最低价】',{value:'883.72',time:now}]])};
-  const row=snapshot(cfg,feed).rows.find(r=>r.name==='黄金');assert.equal(row.sell,'885.73');assert.equal(row.buy,'882.73');assert.equal(row.stale,false);
+  const q=new Quotes({baseQuotes:[{symbol:'黄金',sources:[{sourceId:'rtj',priority:1,enabled:true}]}]});
+  q.ingestTest('rtj','黄金',{buy:882.73,sell:885.73,high:892.08,low:883.72,time:now});
+  q.publish(now);
+  const row=snapshot(cfg,q).rows.find(r=>r.name==='黄金');assert.equal(row.sell,'885.73');assert.equal(row.buy,'882.73');assert.equal(row.stale,false);
   cfg.rows.find(r=>r.name==='黄金').sellFormula='【#黄金#销售价】+3.5';
-  assert.equal(snapshot(cfg,feed).rows.find(r=>r.name==='黄金').sell,'889.23');
-  feed.prices.get('【#黄金#销售价】').time=now-120000;assert.equal(snapshot(cfg,feed).rows[0].stale,true);
-  feed.prices.delete('【#黄金#销售价】');assert.equal(snapshot(cfg,feed).rows[0].sell,null);
+  assert.equal(snapshot(cfg,q).rows.find(r=>r.name==='黄金').sell,'889.23');
+  q.prices.get('【#黄金#销售价】').time=now-120000;assert.equal(snapshot(cfg,q).rows.find(r=>r.name==='黄金').stale,true);
+  q.prices.delete('【#黄金#销售价】');assert.equal(snapshot(cfg,q).rows.find(r=>r.name==='黄金').sell,null);
 });
+// end:aigc.
 test('validates entire config, unknown references, duplicate ids and schema types',()=>{
   for(const mutate of [c=>c.rows[0].buyFormula='alert(1)',c=>c.rows[0].buyFormula='【#黄金#销售价】/0)',c=>c.rows[0].buyFormula='【#不存在#销售价】',c=>c.rows[1].id=c.rows[0].id,c=>c.brand.logo='https://example.com/a',c=>c.schedule[1]='25:00~26:00',c=>c.rows[0].visible='true']){
     const c=structuredClone(defaults);mutate(c);assert.throws(()=>validateConfig(c));
@@ -53,4 +57,18 @@ test('聚合在来源切换后更新来源元数据', () => {
   assert.equal(q.meta.get('X').mode, 'failover');
   assert.equal(switches.length, 1);
 });
+
+// start:aigc.
+test('黄金快照带来源元数据且公式可加销售价差',()=>{
+  const now=Date.now();
+  const q=new Quotes({baseQuotes:[{symbol:'黄金',sources:[{sourceId:'rtj',priority:1,enabled:true,kind:'split',code:'JZJ_au'}]}]});
+  q.sourceName.set('rtj','融通金'); // 模拟 attach 注册的来源名
+  q.ingestTest('rtj','黄金',{buy:882.73,sell:885.73,high:892.08,low:883.72,time:now});
+  q.publish(now);
+  const cfg={version:1,brand:{},openMode:'open',schedule:['','','','','','',''],categories:[{id:'4415',name:'黄金',visible:true,buyFormula:'【#黄金#回购价】',sellFormula:'【#黄金#销售价】+3.5',highFormula:'【#黄金#最高价】',lowFormula:'【#黄金#最低价】',decimals:2,rounding:'half-up'}]};
+  const row=snapshot(cfg,q).rows[0];
+  assert.equal(row.buy,'882.73');assert.equal(row.sell,'889.23');
+  assert.equal(row.source,'rtj');assert.equal(row.sourceName,'融通金');assert.equal(row.sourceMode,'primary');assert.equal(row.stale,false);assert.equal(row.derived,false);
+});
+// end:aigc.
 // end:aigc.

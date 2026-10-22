@@ -41,27 +41,46 @@ export function isShopOpen(config,date=new Date()){
   return (config.schedule[local.getUTCDay()]||'').split(',').filter(Boolean).some(period=>{const [start,end]=period.split('~').map(t=>{const [h,m]=t.split(':').map(Number);return h*60+m;});return minutes>=start&&minutes<end;});
 }
 
-export function snapshot(config,feed,{all=false,now=Date.now(),staleMs=60000}={}){
-  const values=Object.fromEntries([...feed.prices].map(([k,v])=>[k,v.value]));
-  const rows=config.rows.filter(r=>all||r.visible).map(row=>{
-    const out={id:row.id,name:row.name,visible:row.visible,updatedAt:null,stale:!feed.connected,reason:null};
-    const usedTimes=[],issues=[];
+// start:aigc.
+// snapshot 改为从聚合层 quotes 读取价格与来源元数据：每行输出 source/sourceName/sourceMode/derived/inputs。
+// 品类优先读 config.categories（SQLite 目录），回落 config.rows（旧配置，供后台预览接口）。
+// freshness 取所有引用输入（价格时间与来源元数据时间）中最旧时间；status 从 quotes.meta 派生，
+// 保留 connected/sourceStatus/lastMessageAt 字段与前台兼容。
+export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}={}){
+  const values=Object.fromEntries([...quotes.prices].map(([k,v])=>[k,v.value]));
+  const categories=config.categories??config.rows??[];
+  const rows=categories.filter(r=>all||r.visible).map(row=>{
+    const out={id:row.id,name:row.name,visible:row.visible,updatedAt:null,stale:false,source:null,sourceName:null,sourceMode:null,derived:false,inputs:[],reason:null};
+    const usedTimes=[],issues=[],inputMeta=[];
     for(const field of ['buy','sell','high','low']){
       const expr=row[`${field}Formula`];out[field]=null;if(!expr)continue;
-      const refs=references(expr);
-      for(const ref of refs){const item=feed.prices.get(ref);if(item)usedTimes.push(item.time);}
+      for(const ref of references(expr)){
+        const sym=ref.slice(2,ref.lastIndexOf('#'));
+        const m=quotes.meta.get(sym);
+        if(m&&m.updatedAt)usedTimes.push(Date.parse(m.updatedAt));
+        if(m)inputMeta.push({name:sym,source:m.sourceName,time:m.updatedAt});
+        const item=quotes.prices.get(ref);if(item)usedTimes.push(item.time);
+      }
       try{out[field]=calculate(expr,values,row.decimals,row.rounding);}catch(e){issues.push(e.message);}
     }
-    // Freshness follows all referenced inputs, not a heartbeat or the web clock.
+    const referenced=[...new Set(FORMULAS.map((k)=>row[k]).filter(Boolean).flatMap((e)=>references(e)).map((r)=>r.slice(2,r.lastIndexOf('#'))))];
+    out.derived=referenced.length>0&&referenced.some((s)=>s!==row.name);
+    if(referenced.length){
+      const metas=referenced.map((s)=>quotes.meta.get(s)).filter(Boolean);
+      if(metas.length){out.source=metas[0].sourceId;out.sourceName=metas[0].sourceName;out.sourceMode=metas[0].mode;}
+      out.inputs=[...new Map(inputMeta.map((m)=>[m.name,m])).values()];
+    }else{const m=quotes.meta.get(row.name);if(m){out.source=m.sourceId;out.sourceName=m.sourceName;out.sourceMode=m.mode;}}
     if(usedTimes.length){const oldest=Math.min(...usedTimes);out.updatedAt=new Date(oldest).toISOString();if(now-oldest>staleMs)out.stale=true;}
-    else if(FORMULAS.some(f=>row[f]&&references(row[f]).length))out.stale=true;
     if(issues.length){out.reason=[...new Set(issues)].join('；');out.stale=true;}
-    else if(!feed.connected)out.reason='行情连接中断，显示最后有效报价';
     else if(out.stale)out.reason='源报价超过60秒未更新，请核实';
     return out;
   });
-  return {serverTime:new Date(now).toISOString(),configVersion:config.version,brand:config.brand,schedule:config.schedule,status:{connected:feed.connected,lastMessageAt:feed.lastMessageAt||null,sourceStatus:feed.sourceStatus||'等待行情',shopOpen:isShopOpen(config,new Date(now))},rows};
+  const metas=[...quotes.meta.values()];
+  const connected=metas.some((m)=>m.status==='healthy');
+  const lastAt=metas.length?Math.max(...metas.map((m)=>Date.parse(m.updatedAt))):null;
+  return {serverTime:new Date(now).toISOString(),configVersion:config.version,brand:config.brand,schedule:config.schedule,status:{connected,sourceStatus:connected?'已连接':(metas.length?'行情中断':'等待行情'),lastMessageAt:lastAt?new Date(lastAt).toISOString():null,shopOpen:isShopOpen(config,new Date(now))},rows};
 }
+// end:aigc.
 
 // start:aigc.
 // 三元目录校验：品类公式可引用已登记基础行情 symbol、其它业务品类名，或软引用（未知键，运行时空值）。
