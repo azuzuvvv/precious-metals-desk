@@ -2,14 +2,17 @@ import {EventEmitter} from 'node:events';
 import protobuf from 'protobufjs';
 import WebSocket from 'ws';
 import {Blowfish} from 'egoroof-blowfish';
-import {CATALOG,FIELD_LABELS} from './catalog.mjs';
 
 const root=protobuf.loadSync(new URL('./quote.proto',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1'));
 const Message=root.lookupType('QuotationMsg');
 const ENDPOINT='wss://rtjwbqt.ytj9999.com:8443/gateway';
 
 export class QuoteFeed extends EventEmitter {
-  constructor(){super();this.connected=false;this.lastMessageAt=null;this.sourceStatus='连接中';this.prices=new Map();this.metadata=[];this.stopped=false;this.failures=0;this.seq=0;}
+  // start:aigc.
+  // 构造函数改为接收 {map} 驱动：map 为 [{symbol,code,kind:'split'|'plain'}]，替代原先硬编码的 CATALOG。
+  // this.prices 仍保留为空 Map，避免 server.mjs/config.mjs 退役前出现 undefined.prices 报错。
+  constructor({map=[]}={}){super();this.map=map;this.connected=false;this.lastMessageAt=null;this.sourceStatus='连接中';this.prices=new Map();this.metadata=[];this.stopped=false;this.failures=0;this.seq=0;}
+  // end:aigc.
   async start(){this.stopped=false;await this.connect();}
   async discover(){
     const get=async url=>{const r=await fetch(url,{signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error('无法读取源站公开协议');return r.text();};
@@ -60,29 +63,38 @@ export class QuoteFeed extends EventEmitter {
   }
   resolveCatalog(){
     const aliases={'港金':['港金','香港金'],'美元指数':['美元指数'],'公斤条':['公斤条'],'公斤铂':['公斤铂'],'公斤钯':['公斤钯'],'公斤银':['公斤银'],'沪金主力':['沪金主力'],'沪金次主力':['沪金次主力'],'沪银主力':['沪银主力'],'沪银次主力':['沪银次主力'],'美铑金':['美铑金']};
-    for(const row of CATALOG){if(row.code)continue;const match=this.metadata.find(m=>(aliases[row.name]||[row.name]).includes(m.name?.replace(/\s/g,'')));if(match)row.code=match.code;}
+    // start:aigc.
+    // 遍历 this.map（用 row.symbol 匹配别名），为缺少 code 的行回填源站 code。
+    for(const row of this.map){if(row.code)continue;const match=this.metadata.find(m=>(aliases[row.symbol]||[row.symbol]).includes(m.name?.replace(/\s/g,'')));if(match)row.code=match.code;}
+    // end:aigc.
   }
-  subscribe(){const codes=[...new Set(CATALOG.flatMap(r=>r.code?(r.split?[r.code,`${r.code}_PB`,`${r.code}_PS`]:[r.code]):[]))];this.send(18,{codes,freq:[0]});}
+  // start:aigc.
+  // 订阅码改为由 this.map 驱动：split 品种额外订阅 _PB/_PS 两个分拆码，plain 品种仅订阅自身 code。
+  subscribe(){const codes=[...new Set(this.map.flatMap(r=>r.code?(r.kind==='split'?[r.code,`${r.code}_PB`,`${r.code}_PS`]:[r.code]):[]))];this.send(18,{codes,freq:[0]});}
+  // end:aigc.
+  // start:aigc.
   update(q){
     const time=Number(q.quoteTime);if(!Number.isFinite(time)||time<=0||time>Date.now()+300000)return;
-    for(const row of CATALOG){
+    for(const row of this.map){
       const fields={};
-      if(row.split){
+      if(row.kind==='split'){
         if(q.code===`${row.code}_PB`)fields.buy=q.rt?.last;
         else if(q.code===`${row.code}_PS`){fields.sell=q.rt?.last;fields.high=q.high;fields.low=q.low;}
-        else if(q.code===row.code && !this.metadata.some(m=>m.code===`${row.code}_PB`)){fields.buy=q.rt?.bidPrice?.[0];fields.sell=q.rt?.askPrice?.[0];fields.high=q.high;fields.low=q.low;}
+        else if(q.code===row.code&&!this.metadata.some(m=>m.code===`${row.code}_PB`)){fields.buy=q.rt?.bidPrice?.[0];fields.sell=q.rt?.askPrice?.[0];fields.high=q.high;fields.low=q.low;}
         else continue;
       }else if(q.code===row.code){fields.buy=q.rt?.bidPrice?.[0];fields.sell=q.rt?.askPrice?.[0];fields.high=q.high;fields.low=q.low;}
       else continue;
-      for(const [field,value]of Object.entries(fields)){
+      // 过滤掉非有限数字字段后，每个消息对同一 symbol 只 emit 一次合并 tick
+      const cleaned={};
+      for(const [field,value] of Object.entries(fields)){
         if(typeof value!=='number'||!Number.isFinite(value))continue;
-        const key=`【#${row.name}#${FIELD_LABELS[field]}】`,previous=this.prices.get(key);
-        if(previous&&previous.time>time)continue;
-        this.prices.set(key,{value:String(value),time});
+        cleaned[field]=value;
       }
+      if(Object.keys(cleaned).length)this.emit('tick',{symbol:row.symbol,time,...cleaned});
     }
     this.emit('quote',q);
   }
+  // end:aigc.
   retry(){if(this.stopped)return;clearTimeout(this.retryTimer);const delay=Math.min(30000,1000*2**Math.min(this.failures++,5));this.retryTimer=setTimeout(()=>this.connect(),delay);}
   stop(){this.stopped=true;clearTimeout(this.retryTimer);clearTimeout(this.authTimeout);clearInterval(this.heartbeat);clearInterval(this.watchdog);this.ws?.terminate();}
 }
