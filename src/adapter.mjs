@@ -13,7 +13,7 @@ export function normalizeTick(symbol, raw = {}) {
     if (typeof v !== 'number' || !Number.isFinite(v)) continue;
     out[f] = v;
   }
-  if (raw.buy === undefined && raw.sell === undefined) throw new Error('行情缺买卖价');
+  if (out.buy === undefined && out.sell === undefined) throw new Error('行情缺买卖价');
   return out;
 }
 // end:aigc.
