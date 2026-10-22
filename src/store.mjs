@@ -59,28 +59,34 @@ export class Store{
   migrateCatalog(){
     const hasSources=!!this.db.prepare('SELECT id FROM sources LIMIT 1').get();
     if(hasSources)return;
-    const insertSource=this.db.prepare('INSERT OR IGNORE INTO sources (id,name,type,enabled,priority) VALUES (?,?,?,?,?)');
-    for(const s of SOURCES)insertSource.run(s.id,s.name,s.type,s.enabled?1:0,0);
-    const insertBq=this.db.prepare('INSERT OR IGNORE INTO base_quotes (symbol,name,unit,decimals,enabled) VALUES (?,?,?,?,1)');
-    const insertBqs=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES (?,?,?,?,?,1)');
-    for(const bq of BASE_QUOTES){
-      insertBq.run(bq.symbol,bq.name,bq.unit,bq.decimals);
-      for(const s of bq.sources)insertBqs.run(bq.symbol,s.sourceId,s.priority,s.kind,s.code??null);
-    }
-    // 业务品类：从 defaults.json 读取（与现网一致），港金公式替换为换算口径
-    const defaults=JSON.parse(readFileSync(new URL('./defaults.json',import.meta.url),'utf8').replace(/^\uFEFF/,''));
-    const insertCat=this.db.prepare('INSERT OR IGNORE INTO categories (id,name,visible,buy_formula,sell_formula,high_formula,low_formula,decimals,rounding,sort) VALUES (?,?,?,?,?,?,?,?,?,?)');
-    const HKD_BUY='(【#伦敦金#回购价】*【#美元兑港元#回购价】*37.429/31.1034768*0.99)*1+0';
-    const HKD_SELL='(【#伦敦金#销售价】*【#美元兑港元#销售价】*37.429/31.1034768*0.99)*1+0';
-    // 硬缺口品类按 name 精确排除（公斤条出现两次也都排除）
-    const HARD_GAPS=new Set(['公斤条','公斤铂','公斤钯','公斤银','沪金次主力','沪银次主力','美铑金']);
-    defaults.rows.forEach((r,i)=>{
-      if(HARD_GAPS.has(r.name))return;
-      const isHk=r.name==='港金';
-      insertCat.run(r.id,r.name,r.visible?1:0,
-        isHk?HKD_BUY:r.buyFormula,isHk?HKD_SELL:r.sellFormula,
-        r.highFormula,r.lowFormula,r.decimals,r.rounding,i);
-    });
+    // 迁移整体包在事务内：任一步失败即整体回滚，避免 sources 已写入而 base_quotes/categories
+    // 缺失，导致下次启动因幂等守卫直接跳过、永久缺表。
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const insertSource=this.db.prepare('INSERT OR IGNORE INTO sources (id,name,type,enabled,priority) VALUES (?,?,?,?,?)');
+      for(const s of SOURCES)insertSource.run(s.id,s.name,s.type,s.enabled?1:0,0);
+      const insertBq=this.db.prepare('INSERT OR IGNORE INTO base_quotes (symbol,name,unit,decimals,enabled) VALUES (?,?,?,?,1)');
+      const insertBqs=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES (?,?,?,?,?,1)');
+      for(const bq of BASE_QUOTES){
+        insertBq.run(bq.symbol,bq.name,bq.unit,bq.decimals);
+        for(const s of bq.sources)insertBqs.run(bq.symbol,s.sourceId,s.priority,s.kind,s.code??null);
+      }
+      // 业务品类：从 defaults.json 读取（与现网一致），港金公式替换为换算口径
+      const defaults=JSON.parse(readFileSync(new URL('./defaults.json',import.meta.url),'utf8').replace(/^\uFEFF/,''));
+      const insertCat=this.db.prepare('INSERT OR IGNORE INTO categories (id,name,visible,buy_formula,sell_formula,high_formula,low_formula,decimals,rounding,sort) VALUES (?,?,?,?,?,?,?,?,?,?)');
+      const HKD_BUY='(【#伦敦金#回购价】*【#美元兑港元#回购价】*37.429/31.1034768*0.99)*1+0';
+      const HKD_SELL='(【#伦敦金#销售价】*【#美元兑港元#销售价】*37.429/31.1034768*0.99)*1+0';
+      // 硬缺口品类按 name 精确排除（公斤条出现两次也都排除）
+      const HARD_GAPS=new Set(['公斤条','公斤铂','公斤钯','公斤银','沪金次主力','沪银次主力','美铑金']);
+      defaults.rows.forEach((r,i)=>{
+        if(HARD_GAPS.has(r.name))return;
+        const isHk=r.name==='港金';
+        insertCat.run(r.id,r.name,r.visible?1:0,
+          isHk?HKD_BUY:r.buyFormula,isHk?HKD_SELL:r.sellFormula,
+          r.highFormula,r.lowFormula,r.decimals,r.rounding,i);
+      });
+      this.db.exec('COMMIT');
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   sources(){return this.db.prepare('SELECT * FROM sources ORDER BY id').all();}
   baseQuotes(){
