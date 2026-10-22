@@ -72,7 +72,7 @@ export function detectCycles(categories, baseSymbols = new Set()) {
   const byName = new Map(categories.map((c) => [c.name, c]));
   const edges = new Map(categories.map((c) => [c.name, []]));
   for (const c of categories) {
-    for (const key of ['buyFormula', 'sellFormula', 'highFormula', 'lowFormula']) {
+    for (const key of FORMULAS) {
       const expr = (c[key] ?? '').trim(); if (!expr) continue;  // 空公式跳过：references('') 会因 tokens 非空校验抛错
       for (const ref of references(expr)) {
         const target = ref.slice(2, ref.lastIndexOf('#'));
@@ -95,15 +95,20 @@ export function detectCycles(categories, baseSymbols = new Set()) {
 export function validateCatalog({ sources = [], baseQuotes = [], categories = [] }) {
   if (!Array.isArray(baseQuotes)) throw new Error('基础行情格式无效');
   if (!Array.isArray(categories)) throw new Error('业务品类格式无效');
-  const seenIds = new Set();
+  for (const b of baseQuotes) {
+    if (!b || typeof b.symbol !== 'string' || !b.symbol.trim()) throw new Error('基础行情键无效');
+  }
+  const seenIds = new Set(), seenNames = new Set();
   const symbols = new Set(baseQuotes.map((b) => b.symbol));
   for (const c of categories) {
     if (!c || typeof c.id !== 'string' || !/^[\w-]{1,40}$/.test(c.id) || seenIds.has(c.id)) throw new Error('品类编号无效或重复');
     seenIds.add(c.id);
-    if (typeof c.name !== 'string' || !c.name.trim() || c.name.length > 40) throw new Error('品类名称无效');
+    // name 是引用解析键，重复会导致环检测与运行时解析歧义
+    if (typeof c.name !== 'string' || !c.name.trim() || c.name.length > 40 || seenNames.has(c.name)) throw new Error('品类名称无效或重复');
+    seenNames.add(c.name);
     if (!Number.isInteger(c.decimals) || c.decimals < 0 || c.decimals > 6) throw new Error('品类精度无效');
     if (!['half-up', 'floor', 'ceil'].includes(c.rounding)) throw new Error('品类舍入方式无效');
-    for (const key of ['buyFormula', 'sellFormula', 'highFormula', 'lowFormula']) {
+    for (const key of FORMULAS) {
       if (typeof c[key] !== 'string' || c[key].length > 500) throw new Error(`${c.name}公式无效`);
       const expr = c[key].trim(); if (!expr) continue;
       compile(expr);   // 语法与静态除零校验；未知引用为软引用，不在此报错
