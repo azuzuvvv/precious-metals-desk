@@ -116,6 +116,14 @@ export function validateCatalog({ sources = [], baseQuotes = [], categories = []
   if (!Array.isArray(categories)) throw new Error('业务品类格式无效');
   for (const b of baseQuotes) {
     if (!b || typeof b.symbol !== 'string' || !b.symbol.trim()) throw new Error('基础行情键无效');
+    // 与品类对称的结构校验，防止未知 symbol/非法精度透传到 UPDATE 静默丢失
+    if (typeof b.name !== 'string' || !b.name.trim() || b.name.length > 40) throw new Error('基础行情名称无效');
+    if (!Number.isInteger(b.decimals) || b.decimals < 0 || b.decimals > 6) throw new Error('基础行情精度无效');
+    if (b.sources !== undefined && !Array.isArray(b.sources)) throw new Error('基础行情来源格式无效');
+    for (const s of (b.sources || [])) {
+      if (!s || typeof s.sourceId !== 'string' || !s.sourceId.trim()) throw new Error('行情来源标识无效');
+      if (!Number.isInteger(s.priority)) throw new Error('行情来源优先级无效');
+    }
   }
   const seenIds = new Set(), seenNames = new Set();
   const symbols = new Set(baseQuotes.map((b) => b.symbol));

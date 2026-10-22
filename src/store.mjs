@@ -120,6 +120,34 @@ export class Store{
     try{for(const c of list)up.run(c.name,c.visible?1:0,c.buyFormula,c.sellFormula,c.highFormula,c.lowFormula,c.decimals,c.rounding,c.id);this.db.exec('COMMIT');}
     catch(e){this.db.exec('ROLLBACK');throw e;}
   }
+  // start:aigc.
+  // 三元目录整体保存：与 settings 共用版本号做乐观锁（expectedVersion 不符抛 409），
+  // 基础行情+业务品类在同一事务内落库（避免半保存），并写 audit 审计。
+  // 未命中的 UPDATE（symbol/id 不存在）视为保存失败整体回滚，防止静默丢更新。
+  saveCatalog(baseQuotes,categories,expectedVersion){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const current=this.db.prepare('SELECT version FROM settings WHERE id=1').get();
+      if(current.version!==expectedVersion){const e=new Error('目录已被其他窗口修改，请重新加载后再编辑');e.status=409;throw e;}
+      const before=JSON.stringify({baseQuotes:this.baseQuotes(),categories:this.categories()});
+      const up=this.db.prepare('UPDATE base_quotes SET name=?, unit=?, decimals=?, enabled=? WHERE symbol=?');
+      const upS=this.db.prepare('UPDATE base_quote_sources SET priority=?, kind=?, code=?, enabled=? WHERE symbol=? AND source_id=?');
+      const upC=this.db.prepare('UPDATE categories SET name=?, visible=?, buy_formula=?, sell_formula=?, high_formula=?, low_formula=?, decimals=?, rounding=? WHERE id=?');
+      for(const b of baseQuotes){
+        if(up.run(b.name,b.unit,b.decimals,b.enabled?1:0,b.symbol).changes!==1)throw new Error(`基础行情不存在：${b.symbol}`);
+        for(const s of(b.sources||[]))if(upS.run(s.priority,s.kind,s.code??null,s.enabled===false?0:1,b.symbol,s.sourceId).changes!==1)throw new Error(`行情来源不存在：${b.symbol}/${s.sourceId}`);
+      }
+      for(const c of categories){
+        if(upC.run(c.name,c.visible?1:0,c.buyFormula,c.sellFormula,c.highFormula,c.lowFormula,c.decimals,c.rounding,c.id).changes!==1)throw new Error(`业务品类不存在：${c.id}`);
+      }
+      const nextVersion=current.version+1;
+      this.db.prepare('UPDATE settings SET version=? WHERE id=1').run(nextVersion);
+      const after=JSON.stringify({baseQuotes:this.baseQuotes(),categories:this.categories()});
+      this.db.prepare('INSERT INTO audit VALUES(?,?,?,?,?)').run(nextVersion,new Date().toISOString(),'更新行情目录',before,after);
+      this.db.exec('COMMIT');return nextVersion;
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  // end:aigc.
   appendSwitchLog(entry){
     this.db.prepare('INSERT INTO switch_log (at,symbol,old_source,new_source,mode,reason) VALUES (?,?,?,?,?,?)')
       .run(new Date(entry.time||Date.now()).toISOString(),entry.symbol,entry.oldSource??null,entry.newSource??null,entry.mode??null,entry.reason??null);

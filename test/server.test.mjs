@@ -80,15 +80,26 @@ test('admin 可读取来源状态、切换日志并保存三元目录',async()=>
     const hk=catalog.categories.find((c)=>c.name==='港金');
     assert.ok(hk.sellFormula.includes('37.429'));
     assert.ok(catalog.baseQuotes.some((b)=>b.symbol==='美元指数'));
-    // 保存品类：改黄金销售公式后读回生效
+    // 保存品类：改黄金销售公式后读回生效（带版本乐观锁）
     const edited=structuredClone(catalog);
     edited.categories.find((c)=>c.name==='黄金').sellFormula='【#黄金#销售价】+4';
-    assert.equal((await call('/api/admin/catalog',edited)).status,200);
+    const save=await call('/api/admin/catalog',{...edited,expectedVersion:catalog.version});
+    assert.equal(save.status,200);
+    assert.equal(save.data.version,catalog.version+1);
     assert.equal((await call('/api/admin/catalog')).data.categories.find((c)=>c.name==='黄金').sellFormula,'【#黄金#销售价】+4');
+    // 旧版本号再保存：409 冲突
+    assert.equal((await call('/api/admin/catalog',{...edited,expectedVersion:catalog.version})).status,409);
     // 非法目录 400：精度越界
     const bad=structuredClone(catalog);
     bad.categories.find((c)=>c.name==='黄金').decimals=9;
-    assert.equal((await call('/api/admin/catalog',bad)).status,400);
+    assert.equal((await call('/api/admin/catalog',{...bad,expectedVersion:save.data.version})).status,400);
+    // 未知品类 id：400 且整体回滚
+    const ghost=structuredClone(catalog);
+    ghost.categories.push({id:'nope',name:'幽灵',visible:true,buyFormula:'',sellFormula:'',highFormula:'',lowFormula:'',decimals:2,rounding:'half-up'});
+    assert.equal((await call('/api/admin/catalog',{...ghost,expectedVersion:save.data.version})).status,400);
+    assert.equal((await call('/api/admin/catalog')).data.categories.length,catalog.categories.length);
+    // 目录保存写入审计
+    assert.ok((await call('/api/admin/audit')).data.entries.some((e)=>e.summary==='更新行情目录'));
   }finally{await app.close();rmSync(dir,{recursive:true,force:true});}
 });
 // end:aigc.

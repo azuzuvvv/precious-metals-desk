@@ -38,5 +38,9 @@ test('validateCatalog 校验 id/name/decimals/rounding 结构', () => {
   assert.throws(() => validateCatalog({ baseQuotes: BASE, categories: [cat('c1', 'X', ''), cat('c2', 'X', '')] }), /名称无效或重复/);
   // baseQuotes 元素缺 symbol 直接拒绝
   assert.throws(() => validateCatalog({ baseQuotes: [null], categories: [] }), /基础行情键无效/);
+  // baseQuotes 名称/精度/来源结构对称校验
+  assert.throws(() => validateCatalog({ baseQuotes: [{ symbol: 'X', name: '', decimals: 2 }], categories: [] }), /基础行情名称无效/);
+  assert.throws(() => validateCatalog({ baseQuotes: [{ symbol: 'X', name: 'X', decimals: 9 }], categories: [] }), /基础行情精度无效/);
+  assert.throws(() => validateCatalog({ baseQuotes: [{ symbol: 'X', name: 'X', decimals: 2, sources: [{ sourceId: 'a', priority: 'hi' }] }], categories: [] }), /优先级无效/);
 });
 // end:aigc.

@@ -24,6 +24,12 @@ test('首次初始化迁移默认三元目录进 SQLite', () => {
     assert.ok(categories.some((c) => c.name === '港金'));
     const hk = categories.find((c) => c.name === '港金');
     assert.ok(hk.buyFormula.includes('37.429'));
+    // 港金高/低同样为换算公式（旧 defaults 的自引用透传在环检测中会判自环）
+    assert.ok(hk.highFormula.includes('伦敦金'));
+    assert.ok(hk.lowFormula.includes('美元兑港元'));
+    // 铑金公式原样迁移（含对公斤条的软引用）
+    const rh = categories.find((c) => c.name === '铑金');
+    assert.ok(rh && rh.sellFormula.includes('公斤条'));
     store.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
