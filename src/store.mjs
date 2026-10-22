@@ -1,7 +1,9 @@
 import {DatabaseSync,backup} from 'node:sqlite';
 import {mkdirSync,readFileSync,existsSync,writeFileSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
-import {randomBytes,scrypt,timingSafeEqual} from 'node:crypto';
+// start:aigc. 来源密钥加密所需 crypto 原语
+import {randomBytes,scrypt,timingSafeEqual,createCipheriv,createDecipheriv,createHash} from 'node:crypto';
+// end:aigc.
 import {promisify} from 'node:util';
 import {validateConfig} from './config.mjs';
 import {SOURCES,BASE_QUOTES} from './catalog.mjs';
@@ -19,7 +21,7 @@ export class Store{
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS admin (id INTEGER PRIMARY KEY CHECK(id=1), hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS audit (version INTEGER PRIMARY KEY, at TEXT NOT NULL, summary TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL);');
     // start:aigc.
     // 三层行情模型建表：数据源(sources)、基础行情(base_quotes)、基础行情与数据源映射(base_quote_sources)、业务品类(categories)与切换日志(switch_log)。
-    this.db.exec('CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, poll_ms INTEGER, timeout_ms INTEGER, stale_ms INTEGER, last_success_at TEXT, last_error TEXT); CREATE TABLE IF NOT EXISTS base_quotes (symbol TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, enabled INTEGER NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS base_quote_sources (symbol TEXT NOT NULL, source_id TEXT NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL, code TEXT, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (symbol, source_id)); CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, visible INTEGER NOT NULL DEFAULT 1, buy_formula TEXT NOT NULL DEFAULT \'\', sell_formula TEXT NOT NULL DEFAULT \'\', high_formula TEXT NOT NULL DEFAULT \'\', low_formula TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, rounding TEXT NOT NULL DEFAULT \'half-up\', sort INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS switch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, symbol TEXT NOT NULL, old_source TEXT, new_source TEXT, mode TEXT, reason TEXT);');
+    this.db.exec('CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, poll_ms INTEGER, timeout_ms INTEGER, stale_ms INTEGER, last_success_at TEXT, last_error TEXT); CREATE TABLE IF NOT EXISTS base_quotes (symbol TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, enabled INTEGER NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS base_quote_sources (symbol TEXT NOT NULL, source_id TEXT NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL, code TEXT, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (symbol, source_id)); CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, visible INTEGER NOT NULL DEFAULT 1, buy_formula TEXT NOT NULL DEFAULT \'\', sell_formula TEXT NOT NULL DEFAULT \'\', high_formula TEXT NOT NULL DEFAULT \'\', low_formula TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, rounding TEXT NOT NULL DEFAULT \'half-up\', sort INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS switch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, symbol TEXT NOT NULL, old_source TEXT, new_source TEXT, mode TEXT, reason TEXT); CREATE TABLE IF NOT EXISTS source_secrets (source_id TEXT PRIMARY KEY, secret_ciphertext TEXT NOT NULL);');
     // end:aigc.
     if(!this.db.prepare('SELECT id FROM settings WHERE id=1').get()){
       const defaults=validateConfig(JSON.parse(readFileSync(new URL('./defaults.json',import.meta.url),'utf8').replace(/^\uFEFF/,'')));
@@ -120,6 +122,32 @@ export class Store{
   switchLogs(limit=200){
     return this.db.prepare('SELECT * FROM switch_log ORDER BY id DESC LIMIT ?').all(limit);
   }
+  // end:aigc.
+  // start:aigc.
+  // 来源密钥加密存储：AES-256-GCM，主密钥为 data/secret.key（不存在则生成，0600）。
+  // 密文落 source_secrets 表；对外接口尽量只判断是否已配置，明文仅在内部取用时解密。
+  _keyPath(){return join(this.dir,'secret.key');}
+  _key(){
+    const p=this._keyPath();
+    if(!existsSync(p))writeFileSync(p,randomBytes(32),{mode:0o600,flag:'wx'});
+    return createHash('sha256').update(readFileSync(p)).digest();
+  }
+  setSourceSecret(sourceId,secret){
+    const iv=randomBytes(12);
+    const cipher=createCipheriv('aes-256-gcm',this._key(),iv);
+    const enc=Buffer.concat([cipher.update(String(secret),'utf8'),cipher.final()]);
+    const payload=Buffer.concat([iv,cipher.getAuthTag(),enc]).toString('base64');
+    this.db.prepare('INSERT INTO source_secrets VALUES(?,?) ON CONFLICT(source_id) DO UPDATE SET secret_ciphertext=excluded.secret_ciphertext').run(sourceId,payload);
+  }
+  getSourceSecret(sourceId){
+    const row=this.db.prepare('SELECT secret_ciphertext FROM source_secrets WHERE source_id=?').get(sourceId);
+    if(!row)return null;
+    const buf=Buffer.from(row.secret_ciphertext,'base64');
+    const iv=buf.subarray(0,12),tag=buf.subarray(12,28),enc=buf.subarray(28);
+    const d=createDecipheriv('aes-256-gcm',this._key(),iv);d.setAuthTag(tag);
+    return Buffer.concat([d.update(enc),d.final()]).toString('utf8');
+  }
+  hasSourceSecret(sourceId){return !!this.db.prepare('SELECT source_id FROM source_secrets WHERE source_id=?').get(sourceId);}
   // end:aigc.
   close(){this.db.close();}
 }

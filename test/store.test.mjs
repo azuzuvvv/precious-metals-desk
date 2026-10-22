@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+// start:aigc.
+// 来源密钥测试需确认 data/secret.key 已生成
+import { existsSync } from 'node:fs';
+// end:aigc.
 import { Store } from '../src/store.mjs';
 
 test('首次初始化迁移默认三元目录进 SQLite', () => {
@@ -35,3 +39,20 @@ test('港金公式再次打开后持久化', () => {
     store.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// start:aigc.
+test('来源密钥 AES-256-GCM 加密落库且可解密读回', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lcjy-crypto-'));
+  try {
+    const store = new Store(dir);
+    store.setSourceSecret('rtj', 'my-secret-key');
+    assert.equal(store.getSourceSecret('rtj'), 'my-secret-key');
+    assert.equal(store.hasSourceSecret('rtj'), true);
+    assert.equal(store.hasSourceSecret('sina'), false);
+    const raw = store.db.prepare('SELECT secret_ciphertext FROM source_secrets WHERE source_id=?').get('rtj');
+    assert.ok(raw && raw.secret_ciphertext !== 'my-secret-key');
+    assert.ok(existsSync(join(dir, 'secret.key')));
+    store.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// end:aigc.
