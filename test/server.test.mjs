@@ -53,3 +53,42 @@ test('new admin is isolated, authenticated, versioned and persistent',async()=>{
     assert.equal((await call('/api/admin/config')).status,401);
   }finally{await app.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+// start:aigc.
+test('admin 可读取来源状态、切换日志并保存三元目录',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'lcjy-admin-'));const quotes=new Quotes();
+  const app=await createApp({dataDir:dir,quotes});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
+  const base=`http://127.0.0.1:${app.server.address().port}`;
+  let cookie='',csrf='';
+  const call=async(path,data)=>{const res=await fetch(base+path,{method:data?'POST':'GET',headers:{origin:base,...(data?{'content-type':'application/json'}:{}),...(cookie?{cookie}:{}),...(csrf?{'x-csrf-token':csrf}:{})},body:data?JSON.stringify(data):undefined});if(res.headers.get('set-cookie'))cookie=res.headers.get('set-cookie').split(';')[0];return {status:res.status,data:await res.json()};};
+  try{
+    // 未登录全部 401
+    assert.equal((await call('/api/admin/sources')).status,401);
+    assert.equal((await call('/api/admin/catalog')).status,401);
+    const token=readFileSync(join(dir,'setup-token.txt'),'utf8').trim();
+    const setup=await call('/api/admin/setup',{password:'StrongPassword12!',setupToken:token});csrf=setup.data.csrf;
+    // 来源状态：含 rtj/sina，带 hasSecret 标志
+    const sources=(await call('/api/admin/sources')).data.sources;
+    assert.ok(sources.some((s)=>s.id==='rtj'));
+    assert.ok(sources.some((s)=>s.id==='sina'));
+    assert.ok(sources.every((s)=>typeof s.hasSecret==='boolean'));
+    // 切换日志：空数组结构
+    assert.deepEqual((await call('/api/admin/switch-logs')).data.entries,[]);
+    // 三元目录读取：品类含黄金与港金（港金为换算公式）
+    const catalog=(await call('/api/admin/catalog')).data;
+    assert.ok(catalog.categories.some((c)=>c.name==='黄金'));
+    const hk=catalog.categories.find((c)=>c.name==='港金');
+    assert.ok(hk.sellFormula.includes('37.429'));
+    assert.ok(catalog.baseQuotes.some((b)=>b.symbol==='美元指数'));
+    // 保存品类：改黄金销售公式后读回生效
+    const edited=structuredClone(catalog);
+    edited.categories.find((c)=>c.name==='黄金').sellFormula='【#黄金#销售价】+4';
+    assert.equal((await call('/api/admin/catalog',edited)).status,200);
+    assert.equal((await call('/api/admin/catalog')).data.categories.find((c)=>c.name==='黄金').sellFormula,'【#黄金#销售价】+4');
+    // 非法目录 400：精度越界
+    const bad=structuredClone(catalog);
+    bad.categories.find((c)=>c.name==='黄金').decimals=9;
+    assert.equal((await call('/api/admin/catalog',bad)).status,400);
+  }finally{await app.close();rmSync(dir,{recursive:true,force:true});}
+});
+// end:aigc.

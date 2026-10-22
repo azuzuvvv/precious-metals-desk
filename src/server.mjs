@@ -4,7 +4,9 @@ import {fileURLToPath} from 'node:url';
 import {dirname,join,resolve,extname} from 'node:path';
 import {randomBytes,timingSafeEqual} from 'node:crypto';
 import {Store,passwordHash,passwordMatches,validPassword} from './store.mjs';
-import {validateConfig,snapshot} from './config.mjs';
+// start:aigc.
+import {validateConfig,validateCatalog,snapshot} from './config.mjs';
+// end:aigc.
 import {CATALOG} from './catalog.mjs';
 // start:aigc.
 import {attachSina} from './sina.mjs';
@@ -81,6 +83,19 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
         if(path==='/api/admin/preview'&&req.method==='POST'){const data=await body(req);stillAuthorized();json(res,200,snapshot(validateConfig(data.config),aggregator,{all:true}));return;}
         // end:aigc.
         if(path==='/api/admin/config'&&req.method==='POST'){const data=await body(req);stillAuthorized();if(!Number.isInteger(data.expectedVersion))throw error(400,'缺少配置版本');const config=store.save(validateConfig(data.config),data.expectedVersion);json(res,200,{config,version:config.version});return;}
+        // start:aigc.
+        // 三元目录与运行状态 admin API：品类保存即时生效（/api/quotes 每次请求读 categories 表），
+        // 基础行情保存需重启后适配器按新目录建连。来源密钥只回是否已配置，永不回明文。
+        if(path==='/api/admin/sources'&&req.method==='GET'){json(res,200,{sources:store.sources().map((s)=>({...s,hasSecret:store.hasSourceSecret(s.id)}))});return;}
+        if(path==='/api/admin/switch-logs'&&req.method==='GET'){json(res,200,{entries:store.switchLogs()});return;}
+        if(path==='/api/admin/catalog'&&req.method==='GET'){json(res,200,{sources:store.sources(),baseQuotes:store.baseQuotes(),categories:store.categories()});return;}
+        if(path==='/api/admin/catalog'&&req.method==='POST'){
+          const data=await body(req);stillAuthorized();
+          validateCatalog(data);
+          store.saveBaseQuotes(data.baseQuotes);store.saveCategories(data.categories);
+          json(res,200,{ok:true});return;
+        }
+        // end:aigc.
         if(path==='/api/admin/audit'&&req.method==='GET'){json(res,200,{entries:store.audit()});return;}
         if(path==='/api/admin/export'&&req.method==='GET'){res.setHeader('content-disposition','attachment; filename="lcjy-config.json"');json(res,200,store.config());return;}
         if(path==='/api/admin/logout'&&req.method==='POST'){sessions.delete(cookie(req));res.setHeader('set-cookie',`lcjy_session=; HttpOnly;${secure} SameSite=Strict; Path=/; Max-Age=0`);json(res,200,{ok:true});return;}

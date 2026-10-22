@@ -78,6 +78,10 @@ export class Store{
       const insertCat=this.db.prepare('INSERT OR IGNORE INTO categories (id,name,visible,buy_formula,sell_formula,high_formula,low_formula,decimals,rounding,sort) VALUES (?,?,?,?,?,?,?,?,?,?)');
       const HKD_BUY='(【#伦敦金#回购价】*【#美元兑港元#回购价】*37.429/31.1034768*0.99)*1+0';
       const HKD_SELL='(【#伦敦金#销售价】*【#美元兑港元#销售价】*37.429/31.1034768*0.99)*1+0';
+      // 港金最高/最低同样按换算口径：自引用透传（【#港金#最高价】）在环检测中因港金
+      // 不在基础行情 symbol 集合而被判自环，且运行时该键无来源、恒为空值。
+      const HKD_HIGH='(【#伦敦金#最高价】*【#美元兑港元#销售价】*37.429/31.1034768*0.99)*1+0';
+      const HKD_LOW='(【#伦敦金#最低价】*【#美元兑港元#销售价】*37.429/31.1034768*0.99)*1+0';
       // 硬缺口品类按 name 精确排除（公斤条出现两次也都排除）
       const HARD_GAPS=new Set(['公斤条','公斤铂','公斤钯','公斤银','沪金次主力','沪银次主力','美铑金']);
       defaults.rows.forEach((r,i)=>{
@@ -85,7 +89,8 @@ export class Store{
         const isHk=r.name==='港金';
         insertCat.run(r.id,r.name,r.visible?1:0,
           isHk?HKD_BUY:r.buyFormula,isHk?HKD_SELL:r.sellFormula,
-          r.highFormula,r.lowFormula,r.decimals,r.rounding,i);
+          isHk?HKD_HIGH:r.highFormula,isHk?HKD_LOW:r.lowFormula,
+          r.decimals,r.rounding,i);
       });
       this.db.exec('COMMIT');
     }catch(e){this.db.exec('ROLLBACK');throw e;}
