@@ -24,4 +24,17 @@ test('港汇 fx_susdhkd 字段映射解析', () => {
   assert.equal(t.symbol, '美元兑港元');
   assert.equal(t.buy, 7.8450); assert.equal(t.sell, 7.8460);
 });
+// start:aigc.
+test('hf_XAU 外盘字段映射与源时间解析', () => {
+  const quotes = buildSinaQuotes([{ symbol: '伦敦金', sources: [{ sourceId: 'sina', code: 'hf_XAU' }] }]);
+  const raw = 'hq_str_hf_XAU="4015.12,4024.260,4015.12,4015.47,4032.56,3986.78,10:17:00,4024.26,4025.41,0,0,0,2026-10-23,NAME";';
+  const [t] = parseSinaText(raw, quotes, 1792721856000);
+  assert.equal(t.symbol, '伦敦金');
+  assert.equal(t.buy, 4015.12); // buy=[2]
+  assert.equal(t.sell, 4015.47); // sell=[3]
+  assert.equal(t.high, 4032.56);
+  assert.equal(t.low, 3986.78);
+  assert.equal(t.time, Date.parse('2026-10-23T10:17:00'), '源日期+时间组合，而非抓取时间');
+});
+// end:aigc.
 // end:aigc.

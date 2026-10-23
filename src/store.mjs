@@ -33,6 +33,8 @@ export class Store{
     // start:aigc.
     // 构造末尾执行一次目录迁移，已迁移过(sources 已有数据)时内部直接返回，不重复迁移。
     this.migrateCatalog();
+    // R03：旧种子迁移过的库补上新浪外盘备援映射（幂等，见 upgradeSinaFailover）。
+    this.upgradeSinaFailover();
     // end:aigc.
   }
   hasAdmin(){return !!this.db.prepare('SELECT id FROM admin WHERE id=1').get();}
@@ -97,6 +99,17 @@ export class Store{
       this.db.exec('COMMIT');
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
+  // start:aigc.
+  // R03 备援补登记：旧种子迁移过的库补上新浪外盘备援映射。INSERT OR IGNORE 幂等且尊重
+  // 既有行（用户设 enabled=0 的禁用状态保留）；删除行会在重启后复活，如不想使用请禁用而非删除。
+  upgradeSinaFailover(){
+    const HF=[['伦敦金','hf_XAU'],['伦敦银','hf_XAG'],['美黄金','hf_GC'],['美白银','hf_SI'],['美铂金','hf_XPT'],['美钯金','hf_XPD'],['伦敦铂','hf_XPT'],['伦敦钯','hf_XPD']];
+    const ins=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES (?,?,?,?,?,1)');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{for(const [symbol,code] of HF)ins.run(symbol,'sina',2,'sina',code);this.db.exec('COMMIT');}
+    catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  // end:aigc.
   sources(){return this.db.prepare('SELECT * FROM sources ORDER BY id').all();}
   baseQuotes(){
     const base=this.db.prepare('SELECT * FROM base_quotes ORDER BY symbol').all();

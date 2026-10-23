@@ -93,3 +93,25 @@ test('升级迁移保留用户已有基差与自定义品类（R01）', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 // end:aigc.
+// start:aigc.
+test('已迁移库幂等补登记新浪外盘备援（R03）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lcjy-hf-up-'));
+  try {
+    let store = new Store(dir);
+    // 模拟用户禁用伦敦金的新浪备援后重开：补登记不得覆盖 enabled=0
+    store.db.prepare("UPDATE base_quote_sources SET enabled=0 WHERE symbol='伦敦金' AND source_id='sina'").run();
+    store.close();
+    store = new Store(dir);
+    const rows = store.baseQuotes();
+    const xau = rows.find((b) => b.symbol === '伦敦金');
+    const sinaXau = xau.sources.find((s) => s.sourceId === 'sina');
+    assert.ok(sinaXau && sinaXau.code === 'hf_XAU' && sinaXau.priority === 2);
+    assert.equal(sinaXau.enabled, false, '用户的禁用状态必须保留');
+    for (const sym of ['伦敦银','美黄金','美白银','美铂金','美钯金','伦敦铂','伦敦钯']) {
+      const b = rows.find((r) => r.symbol === sym);
+      assert.ok(b.sources.some((s) => s.sourceId === 'sina' && s.code.startsWith('hf_')), `${sym} 应有新浪备援`);
+    }
+    store.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// end:aigc.

@@ -20,6 +20,7 @@ export const SOURCES = [
 ];
 
 // 基础行情：symbol 为统一键；sources 里的 priority 越小优先级越高。
+// start:aigc. 外盘金属品种（R03）以新浪 hf_ 系列做备援；其中伦敦铂/钯的新浪备援为纽约口径近似。 // end:aigc.
 export const BASE_QUOTES = [
   { symbol: '黄金', name: '黄金', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'split', code: 'JZJ_au' }] },
   { symbol: '白银', name: '白银', unit: '元/克', decimals: 3, sources: [{ sourceId: 'rtj', priority: 1, kind: 'split', code: 'JZJ_ag' }] },
@@ -31,14 +32,54 @@ export const BASE_QUOTES = [
   { symbol: '黄金9995', name: '黄金9995', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Au99.95' }] },
   { symbol: '白银TD', name: '白银T+D', unit: '元/千克', decimals: 0, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Ag(T+D)' }] },
   { symbol: '铂金9995', name: '铂金9995', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Pt99.95' }] },
-  { symbol: '美黄金', name: '美黄金', unit: '美元/盎司', decimals: 1, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'GLNC' }] },
-  { symbol: '美白银', name: '美白银', unit: '美元/盎司', decimals: 3, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'SLNC' }] },
-  { symbol: '美铂金', name: '美铂金', unit: '美元/盎司', decimals: 1, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'PLNC' }] },
-  { symbol: '美钯金', name: '美钯金', unit: '美元/盎司', decimals: 1, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'PANC' }] },
-  { symbol: '伦敦金', name: '伦敦金', unit: '美元/盎司', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XAU' }] },
-  { symbol: '伦敦银', name: '伦敦银', unit: '美元/盎司', decimals: 3, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XAG' }] },
-  { symbol: '伦敦铂', name: '伦敦铂', unit: '美元/盎司', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XAP' }] },
-  { symbol: '伦敦钯', name: '伦敦钯', unit: '美元/盎司', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XPD' }] },
+  { symbol: '美黄金', name: '美黄金', unit: '美元/盎司', decimals: 1, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'GLNC' },
+    // start:aigc. R03 新浪备援
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_GC' },
+    // end:aigc.
+  ] },
+  { symbol: '美白银', name: '美白银', unit: '美元/盎司', decimals: 3, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'SLNC' },
+    // start:aigc. R03 新浪备援
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_SI' },
+    // end:aigc.
+  ] },
+  { symbol: '美铂金', name: '美铂金', unit: '美元/盎司', decimals: 1, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'PLNC' },
+    // start:aigc. R03 新浪备援
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_XPT' },
+    // end:aigc.
+  ] },
+  { symbol: '美钯金', name: '美钯金', unit: '美元/盎司', decimals: 1, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'PANC' },
+    // start:aigc. R03 新浪备援
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_XPD' },
+    // end:aigc.
+  ] },
+  { symbol: '伦敦金', name: '伦敦金', unit: '美元/盎司', decimals: 2, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XAU' },
+    // start:aigc. R03 新浪备援（现货同口径）
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_XAU' },
+    // end:aigc.
+  ] },
+  { symbol: '伦敦银', name: '伦敦银', unit: '美元/盎司', decimals: 3, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XAG' },
+    // start:aigc. R03 新浪备援（现货同口径）
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_XAG' },
+    // end:aigc.
+  ] },
+  { symbol: '伦敦铂', name: '伦敦铂', unit: '美元/盎司', decimals: 2, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XAP' },
+    // start:aigc. R03 新浪备援（纽约系近似口径兜底）
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_XPT' },
+    // end:aigc.
+  ] },
+  { symbol: '伦敦钯', name: '伦敦钯', unit: '美元/盎司', decimals: 2, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XPD' },
+    // start:aigc. R03 新浪备援（纽约系近似口径兜底）
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_XPD' },
+    // end:aigc.
+  ] },
   { symbol: '美元指数', name: '美元指数', unit: '点', decimals: 2, sources: [
     { sourceId: 'sina', priority: 1, kind: 'sina', code: 'DINIW' },
     { sourceId: 'yahoo', priority: 2, kind: 'yahoo' },
