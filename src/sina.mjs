@@ -62,13 +62,15 @@ export function parseSinaText(text, quotes, now = Date.now()) {
       const m = /^(\d{2})(\d{2})(\d{2})$/.exec(f[map.timeFields[1]] ?? '');
       const hhmmss = m ? `${m[1]}:${m[2]}:${m[3]}` : f[map.timeFields[1]];
       const parsed = Date.parse(`${f[map.timeFields[0]]}T${hhmmss}+08:00`);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        // 未来守卫（与 feed.mjs 对齐）：源时间明显晚于当前（+300s 容差）视为异常报文，
-        // 整条丢弃不产出 tick，让旧值自然过期暴露为 stale，不产错数据。
-        // 收盘/停更场景时间停在最后交易时刻，由选择器按真实时差正常判过期
-        if (parsed > now + 300000) continue;
-        time = parsed;
-      }
+      // start:aigc. M03：声明了源时间但解析失败（空日期/格式变化/NaN）→ 丢弃整条报文，
+      // 不得回退抓取时间——否则休市缓存旧价每轮被续命，T01 修复被绕过
+      if (!Number.isFinite(parsed) || parsed <= 0) continue;
+      // end:aigc.
+      // 未来守卫（与 feed.mjs 对齐）：源时间明显晚于当前（+300s 容差）视为异常报文，
+      // 整条丢弃不产出 tick，让旧值自然过期暴露为 stale，不产错数据。
+      // 收盘/停更场景时间停在最后交易时刻，由选择器按真实时差正常判过期
+      if (parsed > now + 300000) continue;
+      time = parsed;
     }
     // end:aigc.
     // start:aigc. 一条报文可服务多个共用该 code 的基础行情（如 hf_XPT → 美铂金/伦敦铂）

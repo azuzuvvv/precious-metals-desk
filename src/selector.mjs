@@ -133,12 +133,14 @@ export class Selector {
       if (newest) next = { sourceId: newest.sourceId, mode: 'last-known' };
     }
     // start:aigc. 3) 仍无来源时，降级选有有效 tick 的源（放宽健康检查：stale 也算）
-    //    覆盖源站原生缺失字段场景（如 Pt99.95 只推 askPrice 不推 bidPrice）
+    //    覆盖源站原生缺失字段场景（如 Pt99.95 只推 askPrice 不推 bidPrice）。
+    //    M01：降级选中用独立 partial 模式，不冒充 primary/failover——快照层据此标
+    //    stale 并提示"部分行情缺失"，半截报价不得与健康完整组视觉无差别
     if (!next) {
       for (const src of enabled) {
         const e = this.entries.get(symbol)?.get(src.sourceId);
         if (e && e.status !== DISCONNECTED && this._hasValidTick(e)) {
-          next = { sourceId: src.sourceId, mode: src === enabled[0] ? 'primary' : 'failover' };
+          next = { sourceId: src.sourceId, mode: 'partial' };
           break;
         }
       }

@@ -30,6 +30,25 @@ test('缺输入转下一来源：同刻不完整主源被完整备源立即接�
   assert.equal(q.prices.get('【#X#销售价】').value, '91');
 });
 
+// start:aigc.
+test('M01：源站原生单侧降级为 partial 模式并明确标注不可按完整组使用', () => {
+  // 场景：唯一源只推 sell（如融通金 Pt99.95 只给 askPrice），从未有过完整组
+  const q = new Quotes({ baseQuotes: [BQ('X', [SRC('a', 1)])], categories: [CAT('X类', '【#X#回购价】', '【#X#销售价】')] });
+  q.ingestTest('a', 'X', { sell: 386.9, high: 388.7, low: 385.3, time: 1000 }, 1000);
+  q.publish(1000);
+  // selector：选中但 mode=partial，不冒充 primary/failover
+  assert.equal(q.meta.get('X').mode, 'partial', '单侧降级必须是独立 partial 模式');
+  // snapshot：保留真实单侧数据（sell 有值 buy 空），但必须标 stale 且 reason 明示单边
+  const cfg = { version: 1, brand: {}, openMode: 'open', schedule: ['','','','','','',''],
+    categories: [{ id: 'c1', name: 'X类', visible: true, buyFormula: '【#X#回购价】', sellFormula: '【#X#销售价】', highFormula: '', lowFormula: '', decimals: 2, rounding: 'half-up' }] };
+  const row = snapshot(cfg, q, { now: 1000 }).rows[0];
+  assert.equal(row.sell, '386.90', '真实存在的一侧必须展示（不造假不隐藏）');
+  assert.equal(row.buy, null, '缺失的一侧显示 --，不得复制/派生另一侧');
+  assert.equal(row.stale, true, '半截报价不得与健康完整组视觉无差别');
+  assert.equal(row.reason, '部分行情缺失，仅单边报价');
+});
+// end:aigc.
+
 test('单基础价可派生双侧（规则2）', () => {
   const q = new Quotes({ baseQuotes: [BQ('X', [SRC('a', 1)])] });
   q.ingestTest('a', 'X', { buy: 100, time: 1000 }, 1000);

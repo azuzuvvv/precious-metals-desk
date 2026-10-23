@@ -47,6 +47,7 @@ test('hf_XAU 外盘字段映射与源时间解析', () => {
 });
 
 // start:aigc.
+// start:aigc.
 test('T02：源时间明显晚于当前的异常报文整条丢弃', () => {
   const quotes = buildSinaQuotes([{ symbol: '伦敦金', sources: [{ sourceId: 'sina', code: 'hf_XAU' }] }]);
   // 报文源时间为当前 +1 小时（时钟错位/异常）：必须丢弃不产出 tick，避免未来时间恒不过期
@@ -55,6 +56,21 @@ test('T02：源时间明显晚于当前的异常报文整条丢弃', () => {
   const ticks = parseSinaText(raw, quotes, now);
   assert.equal(ticks.length, 0, '未来时间的报文必须整条丢弃');
 });
+
+// start:aigc.
+test('M03：声明源时间但解析失败（空日期/非法格式）整条丢弃，不回退抓取时间', () => {
+  const quotes = buildSinaQuotes([{ symbol: '美元指数', sources: [{ sourceId: 'sina', code: 'DINIW' }] }]);
+  const now = Date.parse('2026-10-23T16:00:00+08:00');
+  // 场景1：日期位为空 → Date.parse NaN
+  const emptyDate = 'hq_str_DINIW="16:11:03,101.7436,101.7436,101.6219,3414,101.6241,101.8304,101.4890,101.7436,美元指数,";';
+  // 场景2：时间位非法（非 HH:mm:ss / HHmmss）→ 拼接后 NaN
+  const badTime = 'hq_str_DINIW="garbage,101.7436,101.7436,101.6219,3414,101.6241,101.8304,101.4890,101.7436,美元指数,2026-10-23";';
+  for (const [label, raw] of [['空日期', emptyDate], ['非法时间', badTime]]) {
+    const ticks = parseSinaText(raw, quotes, now);
+    assert.equal(ticks.length, 0, `${label}：解析失败必须整条丢弃，不得以抓取时间续命旧价`);
+  }
+});
+// end:aigc.
 
 // start:aigc.
 // T01 实盘修正：nf_/DINIW 报文自带真实日期（[17]/[10]），直接走 timeFields 精确路径，

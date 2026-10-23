@@ -81,7 +81,11 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
       // 显示收盘语义；否则用中性的"停更"（可能是收盘/停推/断线，数据侧无法总是区分）
       const srcIds=[...new Set(referenced.map((s)=>quotes.meta.get(s)?.sourceId).filter(Boolean))];
       const closed=srcIds.length>0&&srcIds.every((id)=>(quotes.adapterStatus.get(id)??'').includes('闭盘'));
-      out.stale=true;out.reason=closed?'已收盘，显示收盘价':'行情已停更，显示最后有效报价';
+      // M01：任一引用源为 partial（单边降级）且未闭盘时，提示单边缺失——
+      // 半截报价必须让员工可辨识，不得与健康完整组视觉无差别
+      const partialMode=referenced.some((s)=>quotes.meta.get(s)?.mode==='partial');
+      out.stale=true;
+      out.reason=closed?'已收盘，显示收盘价':partialMode?'部分行情缺失，仅单边报价':'行情已停更，显示最后有效报价';
     }
     // end:aigc.
     else if(out.stale)out.reason='源报价超过60秒未更新，请核实';
