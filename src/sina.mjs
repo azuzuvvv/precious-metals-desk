@@ -22,10 +22,14 @@ const SINA_QMAP = {
 const number = (v) => { const n = Number(v); return Number.isFinite(n) && n !== 0 ? n : null; };
 
 export function buildSinaQuotes(baseQuotes) {
+  // start:aigc.
+  // 同一 code 可被多个基础行情共用（如 hf_XPT 同时服务美铂金与伦敦铂），
+  // 值必须是 symbol 数组——单对象会被后写覆盖，导致共用品种备援静默失效。
+  // end:aigc.
   const out = {};
   for (const bq of baseQuotes) {
     const s = (bq.sources || []).find((x) => x.sourceId === 'sina');
-    if (s?.code && s.code !== '__NONE__') out[s.code] = { symbol: bq.symbol };
+    if (s?.code && s.code !== '__NONE__') (out[s.code] ??= []).push({ symbol: bq.symbol });
   }
   return out;
 }
@@ -33,7 +37,7 @@ export function buildSinaQuotes(baseQuotes) {
 export function parseSinaText(text, quotes, now = Date.now()) {
   const ticks = [];
   for (const m of text.matchAll(/hq_str_(\w+)="([^"]*)"/g)) {
-    const q = quotes[m[1]]; if (!q) continue;
+    const qs = quotes[m[1]]; if (!qs?.length) continue;
     const map = SINA_QMAP[m[1]]; if (!map) continue;
     const f = m[2].split(',');
     const raw = {};
@@ -42,14 +46,19 @@ export function parseSinaText(text, quotes, now = Date.now()) {
     if (map.mid) { const a = number(f[map.mid[0]]), b = number(f[map.mid[1]]); if (a != null && b != null) raw.buy = (a + b) / 2; }
     if (map.high != null) raw.high = number(f[map.high]);
     if (map.low != null) raw.low = number(f[map.low]);
-    // start:aigc. hf_ 外盘自带源日期+时间（北京时间）时用源时间，缓解抓取时间冒充行情时间（R08 部分）
+    // start:aigc. hf_ 外盘自带源日期+时间（北京时间）时用源时间，缓解抓取时间冒充行情时间（R08 部分）。
+    // 注意：按服务器本地时区解析，依赖部署环境为 +08:00（非 +08:00 时 hf_ 恒 stale，fail-safe 不产错数据）。
     let time = now;
     if (map.timeFields) {
       const parsed = Date.parse(`${f[map.timeFields[0]]}T${f[map.timeFields[1]]}`);
       if (Number.isFinite(parsed) && parsed > 0) time = parsed;
     }
     // end:aigc.
-    try { ticks.push(normalizeTick(q.symbol, { ...raw, time })); } catch { /* 字段不足跳过 */ }
+    // start:aigc. 一条报文可服务多个共用该 code 的基础行情（如 hf_XPT → 美铂金/伦敦铂）
+    for (const q of qs) {
+      try { ticks.push(normalizeTick(q.symbol, { ...raw, time })); } catch { /* 字段不足跳过 */ }
+    }
+    // end:aigc.
   }
   return ticks;
 }

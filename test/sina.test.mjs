@@ -36,5 +36,17 @@ test('hf_XAU 外盘字段映射与源时间解析', () => {
   assert.equal(t.low, 3986.78);
   assert.equal(t.time, Date.parse('2026-10-23T10:17:00'), '源日期+时间组合，而非抓取时间');
 });
-// end:aigc.
+
+test('共用 code 的报文同时服务多个基础行情（hf_XPT → 美铂金/伦敦铂）', () => {
+  const quotes = buildSinaQuotes([
+    { symbol: '伦敦铂', sources: [{ sourceId: 'sina', code: 'hf_XPT' }] },
+    { symbol: '美铂金', sources: [{ sourceId: 'sina', code: 'hf_XPT' }] },
+  ]);
+  assert.equal(quotes.hf_XPT.length, 2, '共用 code 必须聚合为 symbol 数组，不能互相覆盖');
+  const raw = 'hq_str_hf_XPT="1572.305,,1571.200,1571.700,1576.400,1556.500,10:15:24,1576.900,1572.500,0,1,1,2026-10-23,NAME,0";';
+  const ticks = parseSinaText(raw, quotes, 1792721856000);
+  assert.equal(ticks.length, 2, '一条报文必须产出两个品种的 tick');
+  assert.ok(ticks.some((t) => t.symbol === '美铂金' && t.buy === 1571.2));
+  assert.ok(ticks.some((t) => t.symbol === '伦敦铂' && t.buy === 1571.2));
+});
 // end:aigc.
