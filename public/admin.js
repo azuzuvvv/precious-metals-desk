@@ -32,7 +32,8 @@ $('auth-form').onsubmit=event=>{event.preventDefault();task($('auth-submit'),asy
 $('reload').onclick=()=>task($('reload'),async()=>{if((dirty||catalogDirty)&&!confirm('放弃尚未保存的修改，重新加载已保存配置？'))return;await load();await loadCatalog().catch(()=>{});message('已加载最新配置。');});
 // end:aigc.
 // start:aigc. R02：本保存路径仅剩品牌与营业时间（rows 原样回传冻结）
-$('save').onclick=()=>task($('save'),async()=>{const result=await api('config',{config:draft,expectedVersion:version});draft=result.config;version=result.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;message('品牌与营业时间已保存。');});
+$('save').onclick=()=>task($('save'),async()=>{const result=await api('config',{config:draft,expectedVersion:version});draft=result.config;version=result.version;// start:aigc. 品牌/目录共用版本号：保存后同步另一表单的已知版本，避免同窗口交替保存误报 409（F04） // end:aigc.
+catalogVersion=result.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;message('品牌与营业时间已保存。');});
 // end:aigc.
 // start:aigc. 预览目录草稿：走与公开报价一致的 categories 路径（R02）
 $('preview').onclick=()=>task($('preview'),async()=>{if(!catalogDraft){message('请先在「行情目录」页签加载目录',true);return;}const data=await api('preview',{categories:catalogDraft.categories});$('preview-body').replaceChildren(...data.rows.map(r=>{const tr=el('tr');for(const value of [r.name+(r.visible?'':'（隐藏）'),r.buy??'--',r.sell??'--',`${r.high??'--'} / ${r.low??'--'}`,r.reason||(r.stale?'报价过期':'正常')])tr.append(el('td',value));return tr;}));$('preview-status').textContent=`${new Date(data.serverTime).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} · ${data.status.connected?'行情已连接':'行情未连接'} · ${data.status.sourceStatus}`;$('preview-dialog').showModal();});
@@ -43,7 +44,8 @@ $('refresh-history').onclick=()=>task($('refresh-history'),history);
 // start:aigc.
 // 刷新前确认：目录有未保存修改时避免静默覆盖
 $('refresh-switch-logs').onclick=()=>task($('refresh-switch-logs'),async()=>{if(catalogDirty&&!confirm('行情目录有未保存修改，刷新将丢弃，继续？'))return;await loadCatalog();await loadSwitchLogs();});
-$('catalog-save').onclick=()=>task($('catalog-save'),async()=>{if(!catalogDraft)return;const result=await api('catalog',{...catalogDraft,expectedVersion:catalogVersion});catalogVersion=result.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';message('行情目录已保存。基础行情调整需重启服务后生效。');});
+$('catalog-save').onclick=()=>task($('catalog-save'),async()=>{if(!catalogDraft)return;const result=await api('catalog',{...catalogDraft,expectedVersion:catalogVersion});catalogVersion=result.version;// start:aigc. 同窗口目录保存后同步品牌表单版本（F04） // end:aigc.
+version=result.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';message('行情目录已保存。基础行情调整需重启服务后生效。');});
 // end:aigc.
 document.querySelectorAll('[data-tab]').forEach(button=>button.onclick=()=>{
 // start:aigc.
