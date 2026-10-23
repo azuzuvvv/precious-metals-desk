@@ -14,7 +14,7 @@ function input(labelText,value,onInput,{type='text',cls='',options=null,dirtyFn=
 function renderBrand(){const fields=$('brand-fields');fields.replaceChildren();for(const [key,title]of [['name','品牌名称'],['subtitle','副标题'],['notice','滚动公告'],['footer','地址 / 页脚说明'],['phone','联系电话']]){const label=input(title,draft.brand[key],v=>draft.brand[key]=v);if(key==='notice'||key==='footer')label.className='wide';fields.append(label);}$('open-mode').value=draft.openMode;$('open-mode').onchange=()=>{draft.openMode=$('open-mode').value;changed();};$('schedule-fields').replaceChildren();['周日','周一','周二','周三','周四','周五','周六'].forEach((day,i)=>$('schedule-fields').append(input(day,draft.schedule[i],v=>draft.schedule[i]=v)));}
 // start:aigc.
 // 行情目录页签：加载/渲染三元目录与切换日志，保存走版本化乐观锁。
-async function loadCatalog(){const data=await api('catalog');catalogDraft={baseQuotes:data.baseQuotes,categories:data.categories};catalogSources=data.sources;catalogVersion=data.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';renderCatalogSources();renderCatalogBase();renderCatalogRows();}
+async function loadCatalog(){const data=await api('catalog');catalogDraft={baseQuotes:data.baseQuotes,sources:data.sources,categories:data.categories};catalogSources=data.sources;catalogVersion=data.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';renderCatalogSources();renderCatalogBase();renderCatalogRows();}
 function catalogChanged(){catalogDirty=true;$('catalog-dirty').textContent='目录有未保存修改';$('catalog-dirty').className='unsaved';}
 function renderCatalogSources(){$('catalog-sources').replaceChildren(...catalogSources.map(s=>{const box=el('div');box.append(el('strong',s.name+' '),el('span',(s.enabled?'启用':'停用')+(s.hasSecret?' · 密钥已配置':''),s.enabled?'available':'missing'));return box;}));}
 // start:aigc. 基础行情编辑支持增删与来源映射增删（R10）
@@ -26,7 +26,11 @@ function renderCatalogRows(){const frag=document.createDocumentFragment();for(co
 async function loadSwitchLogs(){const data=await api('switch-logs');$('switch-log-list').replaceChildren(...data.entries.map(e=>{const d=el('div',undefined,'history-entry');d.append(el('time',new Date(e.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})),el('strong',e.symbol),el('span',`${e.old_source??'无'} → ${e.new_source??'无'}（${e.mode??''}）${e.reason?' · '+e.reason:''}`));return d;}));if(!data.entries.length)$('switch-log-list').append(el('p','尚无来源切换记录。'));}
 // end:aigc.
 // start:aigc. R02：旧「品种与基差」页签退役，config 仅承载品牌/营业时间（rows 冻结回传不展示）
-async function load(){const data=await api('config');draft=data.config;version=data.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;$('auth').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;$('loading').hidden=true;renderBrand();}
+async function load(){const data=await api('config');draft=data.config;version=data.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;$('auth').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;$('loading').hidden=true;renderBrand();
+// start:aigc. 业务品类为默认页签，登录后预载目录草稿（加载失败不阻断品牌编辑）
+loadCatalog().catch(e=>message(e.message,true));
+// end:aigc.
+}
 // end:aigc.
 async function task(button,work){if(busy)return;busy=true;button.disabled=true;try{await work();}catch(e){message(e.message,true);}finally{busy=false;button.disabled=false;}}
 $('auth-form').onsubmit=event=>{event.preventDefault();task($('auth-submit'),async()=>{if(needsSetup&&$('password').value!==$('confirm-password').value)throw Error('两次密码输入不一致');const result=await api(needsSetup?'setup':'login',{password:$('password').value,...(needsSetup?{setupToken:$('setup-token').value.trim()}:{})});csrf=result.csrf;$('auth-form').reset();await load();$('message').hidden=true;});};
@@ -36,11 +40,15 @@ $('auth-form').onsubmit=event=>{event.preventDefault();task($('auth-submit'),asy
 $('reload').onclick=()=>task($('reload'),async()=>{if((dirty||catalogDirty)&&!confirm('放弃尚未保存的修改，重新加载已保存配置？'))return;await load();await loadCatalog().catch(()=>{});message('已加载最新配置。');});
 // end:aigc.
 // start:aigc. R02：本保存路径仅剩品牌与营业时间（rows 原样回传冻结）
+// start:aigc. 顶部保存升级为全量保存：sticky 工具栏在所有页签可见，用户在品类页签极易误点
+// 此按钮以为目录已存——检测到目录有未保存修改时自动一并保存，消除"点了没反应"陷阱
 $('save').onclick=()=>task($('save'),async()=>{const result=await api('config',{config:draft,expectedVersion:version});draft=result.config;version=result.version;// start:aigc. 品牌/目录共用版本号：保存后同步另一表单的已知版本，避免同窗口交替保存误报 409（F04） // end:aigc.
-catalogVersion=result.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;message('品牌与营业时间已保存。');});
+catalogVersion=result.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;
+if(catalogDirty&&catalogDraft){const r2=await api('catalog',{...catalogDraft,expectedVersion:catalogVersion});catalogVersion=r2.version;version=r2.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';$('version').textContent='配置版本 '+version;message('品牌与行情目录已一并保存。基础行情调整需重启服务后生效。');return;}
+message('品牌与营业时间已保存。');});
 // end:aigc.
 // start:aigc. 预览目录草稿：走与公开报价一致的 categories 路径（R02）
-$('preview').onclick=()=>task($('preview'),async()=>{if(!catalogDraft){message('请先在「行情目录」页签加载目录',true);return;}const data=await api('preview',{categories:catalogDraft.categories});$('preview-body').replaceChildren(...data.rows.map(r=>{const tr=el('tr');for(const value of [r.name+(r.visible?'':'（隐藏）'),r.buy??'--',r.sell??'--',`${r.high??'--'} / ${r.low??'--'}`,r.reason||(r.stale?'报价过期':'正常')])tr.append(el('td',value));return tr;}));$('preview-status').textContent=`${new Date(data.serverTime).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} · ${data.status.connected?'行情已连接':'行情未连接'} · ${data.status.sourceStatus}`;$('preview-dialog').showModal();});
+$('preview').onclick=()=>task($('preview'),async()=>{if(!catalogDraft){message('目录尚未加载完成，请稍候重试',true);return;}const data=await api('preview',{categories:catalogDraft.categories});$('preview-body').replaceChildren(...data.rows.map(r=>{const tr=el('tr');for(const value of [r.name+(r.visible?'':'（隐藏）'),r.buy??'--',r.sell??'--',`${r.high??'--'} / ${r.low??'--'}`,r.reason||(r.stale?'报价过期':'正常')])tr.append(el('td',value));return tr;}));$('preview-status').textContent=`${new Date(data.serverTime).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} · ${data.status.connected?'行情已连接':'行情未连接'} · ${data.status.sourceStatus}`;$('preview-dialog').showModal();});
 // end:aigc.
 $('close-preview').onclick=()=>$('preview-dialog').close();
 async function history(){const data=await api('audit');$('history-list').replaceChildren(...data.entries.map(e=>{const entry=el('div',undefined,'history-entry');entry.append(el('strong','v'+e.version),el('time',new Date(e.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})),el('span',e.summary));return entry;}));if(!data.entries.length)$('history-list').append(el('p','尚无修改记录。'));}
@@ -50,19 +58,31 @@ $('refresh-history').onclick=()=>task($('refresh-history'),history);
 $('refresh-switch-logs').onclick=()=>task($('refresh-switch-logs'),async()=>{if(catalogDirty&&!confirm('行情目录有未保存修改，刷新将丢弃，继续？'))return;await loadCatalog();await loadSwitchLogs();});
 $('catalog-save').onclick=()=>task($('catalog-save'),async()=>{if(!catalogDraft)return;const result=await api('catalog',{...catalogDraft,expectedVersion:catalogVersion});catalogVersion=result.version;// start:aigc. 同窗口目录保存后同步品牌表单版本（F04） // end:aigc.
 version=result.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';message('行情目录已保存。基础行情调整需重启服务后生效。');});
+// start:aigc. 目录拆分（业务品类/基础行情/数据源与日志）：两个目录编辑页签共用整体保存与预览
+$('catalog-save-base').onclick=()=>$('catalog-save').onclick();
+$('preview-cat').onclick=()=>$('preview').onclick();
+// end:aigc.
 // start:aigc. 目录新增模板（R10）：品类默认引用黄金透传；基础行情默认带一条 rtj 映射
 $('add-category').onclick=()=>{catalogDraft.categories.push({id:'custom-'+Date.now(),name:'新黄金品种',visible:false,buyFormula:'【#黄金#回购价】',sellFormula:'【#黄金#销售价】',highFormula:'',lowFormula:'',decimals:2,rounding:'half-up'});catalogChanged();renderCatalogRows();};
 $('add-base-quote').onclick=()=>{catalogDraft.baseQuotes.push({symbol:'new-'+Date.now().toString(36),name:'新基础行情',unit:'',decimals:2,enabled:false,sources:[{sourceId:'rtj',priority:1,kind:'plain',code:'',enabled:true}]});catalogChanged();renderCatalogBase();};
 // end:aigc.
 // end:aigc.
+// start:aigc.
+// 目录拆分后：三个目录相关页签（业务品类/基础行情/数据源与日志）。
+// 编辑发生在前两个；切出编辑页签且有未保存修改时先确认，防止覆盖丢失。
+const CATALOG_EDIT_TABS=['categories','basequotes'];
+const catalogTab=()=>document.querySelector('[data-tab][aria-selected=true]')?.dataset.tab;
+// end:aigc.
 document.querySelectorAll('[data-tab]').forEach(button=>button.onclick=()=>{
 // start:aigc.
-// 目录有未保存修改时，切走页签先确认，防止 loadCatalog 覆盖丢失编辑
-if(catalogDirty&&document.querySelector('[data-tab="sources"]')?.getAttribute('aria-selected')==='true'&&button.dataset.tab!=='sources'&&!confirm('行情目录有未保存修改，切换页签将丢失，继续？'))return;
+// 目录有未保存修改时，从编辑页签切走先确认，防止 loadCatalog 覆盖丢失编辑
+if(catalogDirty&&CATALOG_EDIT_TABS.includes(catalogTab())&&!CATALOG_EDIT_TABS.includes(button.dataset.tab)&&!confirm('行情目录有未保存修改，切换页签将丢失，继续？'))return;
 // end:aigc.
 document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b===button)));document.querySelectorAll('.tab-panel').forEach(p=>p.hidden=p.id!==button.dataset.tab);if(button.dataset.tab==='history')history().catch(e=>message(e.message,true));
 // start:aigc.
-if(button.dataset.tab==='sources'){if(!catalogDirty)loadCatalog().catch(e=>message(e.message,true));loadSwitchLogs().catch(e=>message(e.message,true));}
+// 业务品类/基础行情页签进入时加载目录草稿（未修改时刷新）；数据源页签额外拉切换日志
+if(button.dataset.tab==='categories'||button.dataset.tab==='basequotes'){if(!catalogDirty)loadCatalog().catch(e=>message(e.message,true));}
+if(button.dataset.tab==='sourcelog'){if(!catalogDirty)loadCatalog().catch(e=>message(e.message,true));loadSwitchLogs().catch(e=>message(e.message,true));}
 // end:aigc.
 });
 // start:aigc.
