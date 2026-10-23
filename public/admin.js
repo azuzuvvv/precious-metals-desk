@@ -43,9 +43,12 @@ $('reload').onclick=()=>task($('reload'),async()=>{if((dirty||catalogDirty)&&!co
 // start:aigc. 顶部保存升级为全量保存：sticky 工具栏在所有页签可见，用户在品类页签极易误点
 // 此按钮以为目录已存——检测到目录有未保存修改时自动一并保存，消除"点了没反应"陷阱
 $('save').onclick=()=>task($('save'),async()=>{
-// start:aigc. F02：仅目录有改动时不重复保存品牌——重复保存制造多余版本/审计记录，
-// 且响应丢失后用旧版本重试品牌保存会 409，反而阻断目录保存；直接走目录保存
-if(!dirty&&catalogDirty&&catalogDraft){await saveCatalog();return;}
+// start:aigc. F02：品牌无改动时不发品牌保存——重复点击不得保存未变化的品牌配置
+// 制造多余版本与审计记录（Codex F02 第三点）；仅目录脏时直接走目录保存，
+// 跳过品牌（响应丢失后用旧版本重试品牌保存会 409，反而阻断目录保存）
+if(!dirty){
+  if(catalogDirty&&catalogDraft){await saveCatalog();return;}
+  message('当前没有需要保存的修改。');return;}
 // end:aigc.
 const result=await api('config',{config:draft,expectedVersion:version});draft=result.config;version=result.version;// start:aigc. 品牌/目录共用版本号：保存后同步另一表单的已知版本，避免同窗口交替保存误报 409（F04） // end:aigc.
 catalogVersion=result.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;
