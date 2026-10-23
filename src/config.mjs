@@ -49,13 +49,20 @@ export function isShopOpen(config,date=new Date()){
 export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}={}){
   const values=Object.fromEntries([...quotes.prices].map(([k,v])=>[k,v.value]));
   const categories=config.categories??config.rows??[];
+  // start:aigc. M06：品类引用品类（引用名是品类、非基础 symbol）与软引用在运行时同构——
+  // 品类计算结果不进 values，公式字段静默为空。硬拒绝会误伤既有软引用场景
+  // （铑金引用公斤条 + 用户登记公斤条品类），改为快照层提示：不阻塞保存，但明确告知取值为空
+  const categoryNames=new Set(categories.map((c)=>c?.name).filter(Boolean));
+  // end:aigc.
   const rows=categories.filter(r=>all||r.visible).map(row=>{
     const out={id:row.id,name:row.name,visible:row.visible,updatedAt:null,stale:false,source:null,sourceName:null,sourceMode:null,derived:false,inputs:[],reason:null};
-    const usedTimes=[],inputMeta=[];let sourceDown=false;
+    const usedTimes=[],inputMeta=[];let sourceDown=false,catRef=null;
     for(const field of ['buy','sell','high','low']){
       const expr=row[`${field}Formula`];out[field]=null;if(!expr)continue;
       for(const ref of references(expr)){
         const sym=ref.slice(2,ref.lastIndexOf('#'));
+        // 引用目标是品类名而非基础行情（meta 无此键）：值不可得，行级提示（M06）
+        if(categoryNames.has(sym)&&!quotes.meta.has(sym))catRef=sym;
         const m=quotes.meta.get(sym);
         if(m&&m.updatedAt)usedTimes.push(Date.parse(m.updatedAt));
         if(m)inputMeta.push({name:sym,source:m.sourceName,time:m.updatedAt});
@@ -88,7 +95,10 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
       out.reason=closed?'已收盘，显示收盘价':partialMode?'部分行情缺失，仅单边报价':'行情已停更，显示最后有效报价';
     }
     // end:aigc.
-    else if(out.stale)out.reason='源报价超过60秒未更新，请核实';
+      // start:aigc. M06：品类间引用取值为空——源状态正常时也要明确提示（否则手写
+      // B=A 链式公式会静默全 --），但不阻塞保存（软引用是已确认的业务要求）
+      else if(catRef){out.stale=true;out.reason=`公式引用了品类「${catRef}」，品类间引用暂不支持，相应字段为空`;}
+      else if(out.stale)out.reason='源报价超过60秒未更新，请核实';
     return out;
   });
   const metas=[...quotes.meta.values()];

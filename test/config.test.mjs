@@ -23,6 +23,17 @@ test('detectCycles 对基础 symbol 引用不画边，直连透传不算自环',
   assert.doesNotThrow(() => validateCatalog({ sources: SRCS, baseQuotes: BASE, categories: cats }));
 });
 
+// start:aigc.
+test('M06：品类引用品类放行保存，快照层提示取值为空（不阻塞软引用业务）', () => {
+  // B 引用品类 A（非基础 symbol）：validateCatalog 放行——硬拒绝会误伤铑金引用公斤条
+  // + 用户登记公斤条品类的合法组合（品类引用与软引用运行时同构）
+  const chain = [cat('a', 'A', '【#黄金#回购价】'), cat('b', 'B', '【#A#回购价】')];
+  assert.doesNotThrow(() => validateCatalog({ sources: SRCS, baseQuotes: BASE, categories: chain }));
+  // 品类名与基础 symbol 同名：按基础行情解析，正常路径
+  assert.doesNotThrow(() => validateCatalog({ sources: SRCS, baseQuotes: BASE, categories: [cat('c1', '黄金', '【#黄金#回购价】*1')] }));
+});
+// end:aigc.
+
 test('validateCatalog 允许软引用（未知行情键不报错）', () => {
   // 铑金引用未登记的公斤条：软引用，运行时空值，校验放行
   assert.doesNotThrow(() => validateCatalog({ sources: SRCS, baseQuotes: BASE, categories: [cat('rh', '铑金', '', { sellFormula: '【#公斤条#回购价】*1' })] }));

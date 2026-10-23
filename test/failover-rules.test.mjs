@@ -47,6 +47,25 @@ test('M01：源站原生单侧降级为 partial 模式并明确标注不可按�
   assert.equal(row.stale, true, '半截报价不得与健康完整组视觉无差别');
   assert.equal(row.reason, '部分行情缺失，仅单边报价');
 });
+
+// start:aigc.
+test('M06：品类引用品类放行保存但快照明确提示取值为空（不阻塞铑金软引用组合）', () => {
+  const q = new Quotes({ baseQuotes: [BQ('X', [SRC('a', 1)])] });
+  q.ingestTest('a', 'X', { buy: 100, sell: 101, time: 1000 }, 1000);
+  q.publish(1000);
+  // B 引用品类 A（A 非基础 symbol）：源全部健康，但 B 的引用取不到值——必须有行级提示
+  const cfg = { version: 1, brand: {}, openMode: 'open', schedule: ['','','','','','',''],
+    categories: [
+      { id: 'c1', name: 'A', visible: true, buyFormula: '【#X#回购价】', sellFormula: '【#X#销售价】', highFormula: '', lowFormula: '', decimals: 2, rounding: 'half-up' },
+      { id: 'c2', name: 'B', visible: true, buyFormula: '【#A#回购价】', sellFormula: '【#A#销售价】', highFormula: '', lowFormula: '', decimals: 2, rounding: 'half-up' },
+    ] };
+  const rows = snapshot(cfg, q, { now: 1000 }).rows;
+  const a = rows.find((r) => r.name === 'A'), b = rows.find((r) => r.name === 'B');
+  assert.equal(a.stale, false, 'A 直连基础行情，正常');
+  assert.equal(b.buy, null, '品类间引用取不到值（与软引用运行时同构）');
+  assert.equal(b.stale, true, '手写链式公式不得静默全 --');
+  assert.ok(b.reason && b.reason.includes('品类间引用暂不支持'), 'reason 必须明示原因：' + b.reason);
+});
 // end:aigc.
 
 test('单基础价可派生双侧（规则2）', () => {
