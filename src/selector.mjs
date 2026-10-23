@@ -55,6 +55,10 @@ export class Selector {
     if (!req || !req.length) return true;
     return !!entry.tick && req.every((f) => entry.tick[f] !== undefined && entry.tick[f] !== null);
   }
+  // start:aigc. 只要 tick 有至少一个买卖侧字段就算有效（源站原生单行情品种如 Pt99.95）
+  _hasValidTick(entry) {
+    return !!entry?.tick && (entry.tick.buy !== undefined || entry.tick.sell !== undefined);
+  }
   // end:aigc.
   _entry(symbol, sourceId) {
     const m = this.entries.get(symbol);
@@ -124,11 +128,22 @@ export class Selector {
       let newest = null;
       for (const src of enabled) {
         const e = this.entries.get(symbol)?.get(src.sourceId);
-        // 回退到最后一次完整报价组（F02）：单侧残缺 tick 不作为 last-known
         if (e?.complete && (!newest || e.complete.time > newest.complete.time)) newest = { sourceId: src.sourceId, complete: e.complete };
       }
       if (newest) next = { sourceId: newest.sourceId, mode: 'last-known' };
     }
+    // start:aigc. 3) 仍无来源时，降级选有有效 tick 的源（放宽健康检查：stale 也算）
+    //    覆盖源站原生缺失字段场景（如 Pt99.95 只推 askPrice 不推 bidPrice）
+    if (!next) {
+      for (const src of enabled) {
+        const e = this.entries.get(symbol)?.get(src.sourceId);
+        if (e && e.status !== DISCONNECTED && this._hasValidTick(e)) {
+          next = { sourceId: src.sourceId, mode: src === enabled[0] ? 'primary' : 'failover' };
+          break;
+        }
+      }
+    }
+    // end:aigc.
     const result = next ?? { sourceId: null, mode: null };
     this.selected.set(symbol, result);
     // 仅当来源真正变更（且非首次选定）时触发切换日志

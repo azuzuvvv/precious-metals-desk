@@ -51,7 +51,7 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
   const categories=config.categories??config.rows??[];
   const rows=categories.filter(r=>all||r.visible).map(row=>{
     const out={id:row.id,name:row.name,visible:row.visible,updatedAt:null,stale:false,source:null,sourceName:null,sourceMode:null,derived:false,inputs:[],reason:null};
-    const usedTimes=[],issues=[],inputMeta=[];let sourceDown=false;
+    const usedTimes=[],inputMeta=[];let sourceDown=false;
     for(const field of ['buy','sell','high','low']){
       const expr=row[`${field}Formula`];out[field]=null;if(!expr)continue;
       for(const ref of references(expr)){
@@ -63,8 +63,9 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
         if(m&&((m.mode!=='primary'&&m.mode!=='failover')||(m.status&&m.status!=='healthy')))sourceDown=true;
         const item=quotes.prices.get(ref);if(item)usedTimes.push(item.time);
       }
-      // 高低求值失败仅显示 --，不标过期不设原因（规则5/F03）；买卖失败才计入 issues
-      try{out[field]=calculate(expr,values,row.decimals,row.rounding);}catch(e){if(field==='buy'||field==='sell')issues.push(e.message);}
+      // start:aigc. 所有字段求值失败都仅显示 --，不标整行过期（源站原生单行情品种如 Pt99.95）
+      try{out[field]=calculate(expr,values,row.decimals,row.rounding);}catch(e){}
+      // end:aigc.
     }
     const referenced=[...new Set(FORMULAS.map((k)=>row[k]).filter(Boolean).flatMap((e)=>references(e)).map((r)=>r.slice(2,r.lastIndexOf('#'))))];
     out.derived=referenced.length>0&&referenced.some((s)=>s!==row.name);
@@ -74,8 +75,8 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
       out.inputs=[...new Map(inputMeta.map((m)=>[m.name,m])).values()];
     }else{const m=quotes.meta.get(row.name);if(m){out.source=m.sourceId;out.sourceName=m.sourceName;out.sourceMode=m.mode;}}
     if(usedTimes.length){const oldest=Math.min(...usedTimes);out.updatedAt=new Date(oldest).toISOString();if(now-oldest>staleMs)out.stale=true;}
-    if(issues.length){out.reason=[...new Set(issues)].join('；');out.stale=true;}
-    else if(sourceDown){
+    // start:aigc. 单字段缺失已静默处理，行级 stale 只由 usedTimes 超时或 sourceDown 决定
+    if(sourceDown){
       // start:aigc. 文案细分：last-known 时若引用源上报"闭盘"（如上金所周五收盘停推），
       // 显示收盘语义；否则用中性的"停更"（可能是收盘/停推/断线，数据侧无法总是区分）
       const srcIds=[...new Set(referenced.map((s)=>quotes.meta.get(s)?.sourceId).filter(Boolean))];

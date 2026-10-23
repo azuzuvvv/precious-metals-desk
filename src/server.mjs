@@ -91,7 +91,9 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
         if(path==='/api/admin/catalog'&&req.method==='POST'){
           const data=await body(req);stillAuthorized();
           if(!Number.isInteger(data.expectedVersion))throw error(400,'缺少目录版本');
-          validateCatalog(data);
+          // start:aigc. 防御式补全 sources，防止前端漏传导致空 Set 触发外键校验失败
+          validateCatalog({sources:store.sources(),...data});
+          // end:aigc.
           const version=store.saveCatalog(data.baseQuotes,data.categories,data.expectedVersion);
           aggregator.updateRequirements(store.categories()); // 品类公式变化后立即刷新字段需求
           json(res,200,{ok:true,version});return;
