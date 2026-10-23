@@ -51,7 +51,7 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
   const categories=config.categories??config.rows??[];
   const rows=categories.filter(r=>all||r.visible).map(row=>{
     const out={id:row.id,name:row.name,visible:row.visible,updatedAt:null,stale:false,source:null,sourceName:null,sourceMode:null,derived:false,inputs:[],reason:null};
-    const usedTimes=[],issues=[],inputMeta=[];
+    const usedTimes=[],issues=[],inputMeta=[];let sourceDown=false;
     for(const field of ['buy','sell','high','low']){
       const expr=row[`${field}Formula`];out[field]=null;if(!expr)continue;
       for(const ref of references(expr)){
@@ -59,6 +59,8 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
         const m=quotes.meta.get(sym);
         if(m&&m.updatedAt)usedTimes.push(Date.parse(m.updatedAt));
         if(m)inputMeta.push({name:sym,source:m.sourceName,time:m.updatedAt});
+        // 输入源处于 last-known/无源或非健康状态时，行级必须标记过期（R09）
+        if(m&&((m.mode!=='primary'&&m.mode!=='failover')||(m.status&&m.status!=='healthy')))sourceDown=true;
         const item=quotes.prices.get(ref);if(item)usedTimes.push(item.time);
       }
       try{out[field]=calculate(expr,values,row.decimals,row.rounding);}catch(e){issues.push(e.message);}
@@ -72,6 +74,7 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
     }else{const m=quotes.meta.get(row.name);if(m){out.source=m.sourceId;out.sourceName=m.sourceName;out.sourceMode=m.mode;}}
     if(usedTimes.length){const oldest=Math.min(...usedTimes);out.updatedAt=new Date(oldest).toISOString();if(now-oldest>staleMs)out.stale=true;}
     if(issues.length){out.reason=[...new Set(issues)].join('；');out.stale=true;}
+    else if(sourceDown){out.stale=true;out.reason='行情源中断，显示最后有效报价';}
     else if(out.stale)out.reason='源报价超过60秒未更新，请核实';
     return out;
   });

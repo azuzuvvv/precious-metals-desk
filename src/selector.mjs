@@ -16,6 +16,8 @@ export class Selector {
   configure(baseQuotes = []) {
     this.config.clear(); this.entries.clear(); this.selected.clear();
     for (const bq of baseQuotes) {
+      // 停用的基础行情不参与选源（R07）：不注册候选来源，publish 侧清理残留键
+      if (bq.enabled === false) { this.config.set(bq.symbol, []); this.entries.set(bq.symbol, new Map()); continue; }
       const list = (bq.sources || [])
         .filter((s) => s && s.sourceId)
         .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
