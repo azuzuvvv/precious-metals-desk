@@ -49,12 +49,18 @@ export function parseSinaText(text, quotes, now = Date.now()) {
     if (map.mid) { const a = number(f[map.mid[0]]), b = number(f[map.mid[1]]); if (a != null && b != null) raw.buy = (a + b) / 2; }
     if (map.high != null) raw.high = number(f[map.high]);
     if (map.low != null) raw.low = number(f[map.low]);
-    // start:aigc. hf_ 外盘自带源日期+时间（北京时间）时用源时间，缓解抓取时间冒充行情时间（R08 部分）。
-    // 注意：按服务器本地时区解析，依赖部署环境为 +08:00（非 +08:00 时 hf_ 恒 stale，fail-safe 不产错数据）。
+    // start:aigc. T02 时区修复：hf_/fx_ 自带源日期+时间（北京时间）。显式按东八区解析——
+    // 无时区后缀的 Date.parse 按服务器本地时区，非 +08:00 环境（如 UTC）会把北京时间
+    // 解析成未来 8 小时，now - tick.time 为负 → 恒不过期（旧价续命），并非 fail-safe。
     let time = now;
     if (map.timeFields) {
-      const parsed = Date.parse(`${f[map.timeFields[0]]}T${f[map.timeFields[1]]}`);
-      if (Number.isFinite(parsed) && parsed > 0) time = parsed;
+      const parsed = Date.parse(`${f[map.timeFields[0]]}T${f[map.timeFields[1]]}+08:00`);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        // 未来守卫（与 feed.mjs 对齐）：源时间明显晚于当前（+300s 容差）视为异常报文，
+        // 整条丢弃不产出 tick，让旧值自然过期暴露为 stale，不产错数据
+        if (parsed > now + 300000) continue;
+        time = parsed;
+      }
     }
     // end:aigc.
     // start:aigc. 一条报文可服务多个共用该 code 的基础行情（如 hf_XPT → 美铂金/伦敦铂）

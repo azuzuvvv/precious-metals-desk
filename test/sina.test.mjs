@@ -26,7 +26,7 @@ test('港汇 fx_susdhkd 字段映射解析', () => {
   assert.equal(t.buy, 7.8414); assert.equal(t.sell, 7.8419);
   assert.equal(t.high, 7.8491, '日高取 [14]，不是持仓量位 [4]');
   assert.equal(t.low, 7.7815, '日低取 [15]');
-  assert.equal(t.time, Date.parse('2026-10-23T11:11:21'), '源日期[17]+时间[0]组合');
+  assert.equal(t.time, Date.parse('2026-10-23T11:11:21+08:00'), '源日期[17]+时间[0]按东八区组合解析');
 });
 // start:aigc.
 test('hf_XAU 外盘字段映射与源时间解析', () => {
@@ -38,8 +38,19 @@ test('hf_XAU 外盘字段映射与源时间解析', () => {
   assert.equal(t.sell, 4015.47); // sell=[3]
   assert.equal(t.high, 4032.56);
   assert.equal(t.low, 3986.78);
-  assert.equal(t.time, Date.parse('2026-10-23T10:17:00'), '源日期+时间组合，而非抓取时间');
+  assert.equal(t.time, Date.parse('2026-10-23T10:17:00+08:00'), '源日期+时间按东八区组合解析，而非抓取时间');
 });
+
+// start:aigc.
+test('T02：源时间明显晚于当前的异常报文整条丢弃', () => {
+  const quotes = buildSinaQuotes([{ symbol: '伦敦金', sources: [{ sourceId: 'sina', code: 'hf_XAU' }] }]);
+  // 报文源时间为当前 +1 小时（时钟错位/异常）：必须丢弃不产出 tick，避免未来时间恒不过期
+  const now = Date.parse('2026-10-23T10:00:00+08:00');
+  const raw = 'hq_str_hf_XAU="4015.12,4024.260,4015.12,4015.47,4032.56,3986.78,11:00:00,4024.26,4025.41,0,0,0,2026-10-23,NAME";';
+  const ticks = parseSinaText(raw, quotes, now);
+  assert.equal(ticks.length, 0, '未来时间的报文必须整条丢弃');
+});
+// end:aigc.
 
 test('共用 code 的报文同时服务多个基础行情（hf_XPT → 美铂金/伦敦铂）', () => {
   const quotes = buildSinaQuotes([

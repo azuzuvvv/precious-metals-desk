@@ -29,7 +29,26 @@ export class Selector {
   }
   // start:aigc.
   // 运行期更新字段需求（目录保存后品类公式变化时调用），不清空连接状态。
-  setRequired(required = new Map()) { for (const [symbol, fields] of required) this.required.set(symbol, [...fields]); }
+  // T03：需求变化后重验既有缓存——complete 组不再满足新必需字段的立即清除并重选，
+  // 避免旧标准下的"完整组"（如只有买价）在断源后继续冒充 last-known 违背买卖成组约定。
+  setRequired(required = new Map()) {
+    const touched = [];
+    for (const [symbol, fields] of required) {
+      const next = [...fields], prev = this.required.get(symbol);
+      if (prev && prev.length === next.length && prev.every((f, i) => f === next[i])) continue; // 需求未变
+      this.required.set(symbol, next);
+      touched.push(symbol);
+    }
+    const now = Date.now();
+    for (const symbol of touched) {
+      const entries = this.entries.get(symbol); if (!entries) continue;
+      const req = this.required.get(symbol) ?? [];
+      // 直接对 complete 缓存组验证（非 entry.tick：tick 可能是残缺的最新帧）
+      const satisfies = (t) => !!t && (req.length === 0 || req.every((f) => t[f] !== undefined && t[f] !== null));
+      for (const entry of entries.values()) if (!satisfies(entry.complete)) entry.complete = null;
+      this._reselect(symbol, now);
+    }
+  }
   // 候选源完整性：tick 覆盖全部必需字段才算可用（无需求时恒完整）
   _complete(symbol, entry) {
     const req = this.required.get(symbol);

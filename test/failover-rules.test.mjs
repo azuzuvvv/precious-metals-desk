@@ -93,6 +93,23 @@ test('last-known 源自身单侧化时仍返回完整组而非残缺 tick（F02 
   assert.equal(q.prices.get('【#X#销售价】').value, '101');
 });
 
+// start:aigc.
+test('公式需求变化后旧完整组不再冒充 last-known（T03）', () => {
+  const q = new Quotes({ baseQuotes: [BQ('X', [SRC('a', 1)])] });
+  q.ingestTest('a', 'X', { buy: 100, time: 1000 }, 1000);   // 旧需求（无品类）只需买价，缓存为"完整组"
+  q.publish(1000);
+  assert.ok(q.selector.entries.get('X').get('a').complete, '旧标准下缓存了完整组');
+  // 品类公式改为需要买卖双侧：需求变化必须重验并清除不满足新需求的 complete
+  q.updateRequirements([CAT('X类', '【#X#回购价】', '【#X#销售价】')]);
+  assert.equal(q.selector.entries.get('X').get('a').complete, null, '只有买价的旧组必须被清除');
+  // 之后断源：残缺旧组不得作为 last-known 返回
+  q.failTest('a', 'X', '断线');
+  q.publish(1001);
+  assert.equal(q.prices.get('【#X#回购价】'), undefined, '清除后断源不得回退残缺旧组');
+  assert.equal(q.prices.get('【#X#销售价】'), undefined);
+});
+// end:aigc.
+
 test('高低缺失显示空且不拖垮买卖报价（规则5/F03）', () => {
   const q = new Quotes({ baseQuotes: [BQ('X', [SRC('a', 1)])], categories: [CAT('X类', '【#X#回购价】', '【#X#销售价】', { highFormula: '【#X#最高价】', lowFormula: '【#X#最低价】' })] });
   q.ingestTest('a', 'X', { buy: 100, sell: 101, time: 1000 }, 1000);  // 源无高低
