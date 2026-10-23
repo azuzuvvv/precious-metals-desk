@@ -73,8 +73,10 @@ export class Store{
         insertBq.run(bq.symbol,bq.name,bq.unit,bq.decimals);
         for(const s of bq.sources)insertBqs.run(bq.symbol,s.sourceId,s.priority,s.kind,s.code??null);
       }
-      // 业务品类：从 defaults.json 读取（与现网一致），港金公式替换为换算口径
-      const defaults=JSON.parse(readFileSync(new URL('./defaults.json',import.meta.url),'utf8').replace(/^\uFEFF/,''));
+      // 业务品类：港金公式替换为换算口径。
+      // 迁移源用现有生效配置（settings.rows，用户可能已改过基差/自定义品类/排序），
+      // 而不是 defaults.json——否则升级丢失用户配置（R01）
+      const rows=this.config().rows;
       const insertCat=this.db.prepare('INSERT OR IGNORE INTO categories (id,name,visible,buy_formula,sell_formula,high_formula,low_formula,decimals,rounding,sort) VALUES (?,?,?,?,?,?,?,?,?,?)');
       const HKD_BUY='(【#伦敦金#回购价】*【#美元兑港元#回购价】*37.429/31.1034768*0.99)*1+0';
       const HKD_SELL='(【#伦敦金#销售价】*【#美元兑港元#销售价】*37.429/31.1034768*0.99)*1+0';
@@ -84,7 +86,7 @@ export class Store{
       const HKD_LOW='(【#伦敦金#最低价】*【#美元兑港元#销售价】*37.429/31.1034768*0.99)*1+0';
       // 硬缺口品类按 name 精确排除（公斤条出现两次也都排除）
       const HARD_GAPS=new Set(['公斤条','公斤铂','公斤钯','公斤银','沪金次主力','沪银次主力','美铑金']);
-      defaults.rows.forEach((r,i)=>{
+      rows.forEach((r,i)=>{
         if(HARD_GAPS.has(r.name))return;
         const isHk=r.name==='港金';
         insertCat.run(r.id,r.name,r.visible?1:0,

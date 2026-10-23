@@ -62,3 +62,34 @@ test('来源密钥 AES-256-GCM 加密落库且可解密读回', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 // end:aigc.
+// start:aigc.
+test('升级迁移保留用户已有基差与自定义品类（R01）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lcjy-upgrade-'));
+  try {
+    let store = new Store(dir);
+    // 模拟旧版本运营期修改：黄金加基差、隐藏白银、新增自定义品类
+    const cfg = store.config();
+    cfg.rows.find(r => r.name === '黄金').sellFormula = '【#黄金#销售价】+3.5';
+    cfg.rows.find(r => r.name === '白银').visible = false;
+    cfg.rows.push({ id: 'custom-9', name: '金条定制', visible: true, buyFormula: '【#黄金#回购价】*1.005', sellFormula: '【#黄金#销售价】*1.005', highFormula: '', lowFormula: '', decimals: 2, rounding: 'half-up' });
+    store.save(cfg, cfg.version);
+    // 回到未迁移状态：清空目录三表 + sources（幂等守卫依据）
+    store.db.exec('DELETE FROM categories; DELETE FROM base_quotes; DELETE FROM base_quote_sources; DELETE FROM sources;');
+    store.close();
+    // 重新打开触发迁移
+    store = new Store(dir);
+    const cats = store.categories();
+    const gold = cats.find(c => c.name === '黄金');
+    assert.equal(gold.sellFormula, '【#黄金#销售价】+3.5', '用户基差必须保留');
+    assert.equal(cats.find(c => c.name === '白银').visible, false, '可见性必须保留');
+    const custom = cats.find(c => c.name === '金条定制');
+    assert.ok(custom, '自定义品类必须迁入');
+    assert.equal(custom.buyFormula, '【#黄金#回购价】*1.005');
+    const hk = cats.find(c => c.name === '港金');
+    assert.ok(hk.sellFormula.includes('37.429'), '港金仍替换为换算公式');
+    for (const gap of ['公斤条','公斤铂','公斤钯','公斤银','沪金次主力','沪银次主力','美铑金'])
+      assert.equal(cats.filter(c => c.name === gap).length, 0, `${gap} 仍不迁入`);
+    store.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// end:aigc.
