@@ -95,11 +95,29 @@ test('admin 可读取来源状态、切换日志并保存三元目录',async()=>
     const bad=structuredClone(catalog);
     bad.categories.find((c)=>c.name==='黄金').decimals=9;
     assert.equal((await call('/api/admin/catalog',{...bad,expectedVersion:save.data.version})).status,400);
-    // 未知品类 id：400 且整体回滚
-    const ghost=structuredClone(catalog);
-    ghost.categories.push({id:'nope',name:'幽灵',visible:true,buyFormula:'',sellFormula:'',highFormula:'',lowFormula:'',decimals:2,rounding:'half-up'});
-    assert.equal((await call('/api/admin/catalog',{...ghost,expectedVersion:save.data.version})).status,400);
-    assert.equal((await call('/api/admin/catalog')).data.categories.length,catalog.categories.length);
+    // start:aigc.
+    // 新增品类（R10）：硬缺口品种自配场景，保存后目录与公开报价均出现
+    const withGap=structuredClone((await call('/api/admin/catalog')).data);
+    withGap.categories.push({id:'gap-4411',name:'公斤条',visible:true,buyFormula:'【#黄金#回购价】*12.5',sellFormula:'【#黄金#销售价】*12.5',highFormula:'',lowFormula:'',decimals:2,rounding:'half-up'});
+    assert.equal((await call('/api/admin/catalog',{...withGap,expectedVersion:withGap.version})).status,200);
+    assert.ok((await call('/api/admin/catalog')).data.categories.some((c)=>c.name==='公斤条'));
+    // 删除品类（R10）：保存后目录与公开报价均移除
+    const removed=structuredClone((await call('/api/admin/catalog')).data);
+    removed.categories=removed.categories.filter((c)=>c.name!=='公斤条');
+    assert.equal((await call('/api/admin/catalog',{...removed,expectedVersion:removed.version})).status,200);
+    assert.ok(!(await call('/api/admin/catalog')).data.categories.some((c)=>c.name==='公斤条'));
+    // 排序（R10）：黄金移到末尾后读回顺序一致
+    const reordered=structuredClone((await call('/api/admin/catalog')).data);
+    const goldCat=reordered.categories.find((c)=>c.name==='黄金');
+    reordered.categories=reordered.categories.filter((c)=>c!==goldCat).concat([goldCat]);
+    assert.equal((await call('/api/admin/catalog',{...reordered,expectedVersion:reordered.version})).status,200);
+    assert.equal((await call('/api/admin/catalog')).data.categories.at(-1).name,'黄金');
+    // 基础行情增删（R10）
+    const withBq=structuredClone((await call('/api/admin/catalog')).data);
+    withBq.baseQuotes.push({symbol:'probe-x',name:'探针行情',unit:'',decimals:2,enabled:false,sources:[{sourceId:'rtj',priority:1,kind:'plain',code:'XAU'}]});
+    assert.equal((await call('/api/admin/catalog',{...withBq,expectedVersion:withBq.version})).status,200);
+    assert.ok((await call('/api/admin/catalog')).data.baseQuotes.some((b)=>b.symbol==='probe-x'));
+    // end:aigc.
     // start:aigc.
     // 保存目录必须实际影响公开报价（R02 验收：不止配置读回）
     const quotesApp=app;

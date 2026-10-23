@@ -123,25 +123,38 @@ export class Store{
     catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   // start:aigc.
-  // 三元目录整体保存：与 settings 共用版本号做乐观锁（expectedVersion 不符抛 409），
-  // 基础行情+业务品类在同一事务内落库（避免半保存），并写 audit 审计。
-  // 未命中的 UPDATE（symbol/id 不存在）视为保存失败整体回滚，防止静默丢更新。
+  // 三元目录整体保存（diff 语义，R10）：以提交列表为准——已存在 UPDATE、新 id/symbol
+  // INSERT、库中多余 DELETE；品类 sort 按提交顺序重排。与 settings 共用版本号做乐观锁，
+  // 单事务落库并写 audit。来源映射整体重建（表小且无外键，事务内先清后插等价且更简单）。
   saveCatalog(baseQuotes,categories,expectedVersion){
     this.db.exec('BEGIN IMMEDIATE');
     try{
       const current=this.db.prepare('SELECT version FROM settings WHERE id=1').get();
       if(current.version!==expectedVersion){const e=new Error('目录已被其他窗口修改，请重新加载后再编辑');e.status=409;throw e;}
       const before=JSON.stringify({baseQuotes:this.baseQuotes(),categories:this.categories()});
-      const up=this.db.prepare('UPDATE base_quotes SET name=?, unit=?, decimals=?, enabled=? WHERE symbol=?');
-      const upS=this.db.prepare('UPDATE base_quote_sources SET priority=?, kind=?, code=?, enabled=? WHERE symbol=? AND source_id=?');
-      const upC=this.db.prepare('UPDATE categories SET name=?, visible=?, buy_formula=?, sell_formula=?, high_formula=?, low_formula=?, decimals=?, rounding=? WHERE id=?');
+      // 业务品类：按 id diff，sort=数组下标
+      const catIds=categories.map((c)=>c.id);
+      const upC=this.db.prepare('UPDATE categories SET name=?, visible=?, buy_formula=?, sell_formula=?, high_formula=?, low_formula=?, decimals=?, rounding=?, sort=? WHERE id=?');
+      const insC=this.db.prepare('INSERT INTO categories (id,name,visible,buy_formula,sell_formula,high_formula,low_formula,decimals,rounding,sort) VALUES (?,?,?,?,?,?,?,?,?,?)');
+      for(const [i,c] of categories.entries()){
+        const args=[c.name,c.visible?1:0,c.buyFormula,c.sellFormula,c.highFormula,c.lowFormula,c.decimals,c.rounding];
+        if(upC.run(...args,i,c.id).changes!==1)insC.run(c.id,...args,i);
+      }
+      if(catIds.length)this.db.prepare(`DELETE FROM categories WHERE id NOT IN (${catIds.map(()=>'?').join(',')})`).run(...catIds);
+      else this.db.exec('DELETE FROM categories');
+      // 基础行情：按 symbol diff
+      const symbols=baseQuotes.map((b)=>b.symbol);
+      const upB=this.db.prepare('UPDATE base_quotes SET name=?, unit=?, decimals=?, enabled=? WHERE symbol=?');
+      const insB=this.db.prepare('INSERT INTO base_quotes (symbol,name,unit,decimals,enabled) VALUES (?,?,?,?,?)');
       for(const b of baseQuotes){
-        if(up.run(b.name,b.unit,b.decimals,b.enabled?1:0,b.symbol).changes!==1)throw new Error(`基础行情不存在：${b.symbol}`);
-        for(const s of(b.sources||[]))if(upS.run(s.priority,s.kind,s.code??null,s.enabled===false?0:1,b.symbol,s.sourceId).changes!==1)throw new Error(`行情来源不存在：${b.symbol}/${s.sourceId}`);
+        if(upB.run(b.name,b.unit,b.decimals,b.enabled?1:0,b.symbol).changes!==1)insB.run(b.symbol,b.name,b.unit,b.decimals,b.enabled?1:0);
       }
-      for(const c of categories){
-        if(upC.run(c.name,c.visible?1:0,c.buyFormula,c.sellFormula,c.highFormula,c.lowFormula,c.decimals,c.rounding,c.id).changes!==1)throw new Error(`业务品类不存在：${c.id}`);
-      }
+      if(symbols.length)this.db.prepare(`DELETE FROM base_quotes WHERE symbol NOT IN (${symbols.map(()=>'?').join(',')})`).run(...symbols);
+      else this.db.exec('DELETE FROM base_quotes');
+      // 来源映射：整体重建
+      this.db.exec('DELETE FROM base_quote_sources');
+      const insS=this.db.prepare('INSERT INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES (?,?,?,?,?,?)');
+      for(const b of baseQuotes)for(const s of(b.sources||[]))insS.run(b.symbol,s.sourceId,s.priority,s.kind,s.code??null,s.enabled===false?0:1);
       const nextVersion=current.version+1;
       this.db.prepare('UPDATE settings SET version=? WHERE id=1').run(nextVersion);
       const after=JSON.stringify({baseQuotes:this.baseQuotes(),categories:this.categories()});
