@@ -5,11 +5,12 @@
 import { normalizeTick } from './adapter.mjs';
 
 const SINA_QMAP = {
-  // start:aigc. T01：DINIW/nf_ 系列报文无日期字段，timeOnly 指向 HH:mm:ss 位置，
-  // 解析时用三天候选构造绝对源时间（见 parseSinaText），休市缓存不再被轮询时间续命
-  DINIW: { buy: 1, sell: 2, high: 6, low: 7, timeOnly: 0 },     // 美元指数
-  nf_AU0: { mid: [6, 7], sell: 7, high: 3, low: 4, timeOnly: 1 }, // 沪金主力：回购=买卖中间价
-  nf_AG0: { mid: [6, 7], sell: 7, high: 3, low: 4, timeOnly: 1 }, // 沪银主力
+  // start:aigc. T01/T02：报文时间走 timeFields（日期位+时间位）。实盘探针（2026-10-23 收盘时段）确认：
+  // DINIW [10]=日期 [0]=HH:mm:ss；nf_ 期货 [17]=日期 [1]=HHmmss（无冒号，解析时归一化）。
+  // 收盘后报文时间停在收盘时刻 → tick.time 真实停更 → 超阈值暴露为 stale，不再被轮询续命
+  DINIW: { buy: 1, sell: 2, high: 6, low: 7, timeFields: [10, 0] },            // 美元指数
+  nf_AU0: { mid: [6, 7], sell: 7, high: 3, low: 4, timeFields: [17, 1] },      // 沪金主力：回购=买卖中间价
+  nf_AG0: { mid: [6, 7], sell: 7, high: 3, low: 4, timeFields: [17, 1] },      // 沪银主力
   // end:aigc.
   // start:aigc. fx_susdhkd 字段经 verify-live 港汇探针实测定标：
   // [1]买 [2]卖 [14]日高 [15]日低（原 high:4 取到的是持仓量 61，非价格）；[17]日期+[0]时间为源时间
@@ -52,30 +53,21 @@ export function parseSinaText(text, quotes, now = Date.now()) {
     if (map.mid) { const a = number(f[map.mid[0]]), b = number(f[map.mid[1]]); if (a != null && b != null) raw.buy = (a + b) / 2; }
     if (map.high != null) raw.high = number(f[map.high]);
     if (map.low != null) raw.low = number(f[map.low]);
-    // start:aigc. T02 时区修复：hf_/fx_ 自带源日期+时间（北京时间）。显式按东八区解析——
+    // start:aigc. T02 时区修复：报文自带源日期+时间（北京时间）。显式按东八区解析——
     // 无时区后缀的 Date.parse 按服务器本地时区，非 +08:00 环境（如 UTC）会把北京时间
     // 解析成未来 8 小时，now - tick.time 为负 → 恒不过期（旧价续命），并非 fail-safe。
+    // T01：部分接口（nf_ 期货）时间为无冒号 HHmmss（如 150000），先归一化再拼接。
     let time = now;
     if (map.timeFields) {
-      const parsed = Date.parse(`${f[map.timeFields[0]]}T${f[map.timeFields[1]]}+08:00`);
+      const m = /^(\d{2})(\d{2})(\d{2})$/.exec(f[map.timeFields[1]] ?? '');
+      const hhmmss = m ? `${m[1]}:${m[2]}:${m[3]}` : f[map.timeFields[1]];
+      const parsed = Date.parse(`${f[map.timeFields[0]]}T${hhmmss}+08:00`);
       if (Number.isFinite(parsed) && parsed > 0) {
         // 未来守卫（与 feed.mjs 对齐）：源时间明显晚于当前（+300s 容差）视为异常报文，
-        // 整条丢弃不产出 tick，让旧值自然过期暴露为 stale，不产错数据
+        // 整条丢弃不产出 tick，让旧值自然过期暴露为 stale，不产错数据。
+        // 收盘/停更场景时间停在最后交易时刻，由选择器按真实时差正常判过期
         if (parsed > now + 300000) continue;
         time = parsed;
-      }
-    } else if (map.timeOnly != null) {
-      // start:aigc. T01：无日期接口（DINIW/nf_）用报文 HH:mm:ss + 三天候选（前/当/后一天）
-      // 构造绝对源时间——取距当前最近且不明显未来的候选。休市缓存报文会得到很旧的
-      // 绝对时间，时差自然超过 staleMs 暴露为 stale，不再被每次轮询的抓取时间续命；
-      // 夜盘跨零点（凌晨收到昨日 23:5x）由前一天的候选正确兜住，不会误拼成未来 24h。
-      const hhmm = /^\d{1,2}:\d{2}(?::\d{2})?$/.test(f[map.timeOnly] ?? '') ? f[map.timeOnly] : null;
-      if (hhmm) {
-        const bjDay = (offset) => new Date(now + 8 * 3600000 + offset * 86400000).toISOString().slice(0, 10);
-        const cands = [-1, 0, 1].map((d) => Date.parse(`${bjDay(d)}T${hhmm}+08:00`)).filter(Number.isFinite);
-        const ok = cands.filter((c) => c <= now + 300000);   // 排除明显未来
-        if (ok.length) time = ok.reduce((a, b) => (Math.abs(a - now) <= Math.abs(b - now) ? a : b));
-        else if (cands.length) continue;                     // 候选全在未来：异常报文整条丢弃
       }
     }
     // end:aigc.

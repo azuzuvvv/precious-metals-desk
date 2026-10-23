@@ -18,6 +18,10 @@ export class Quotes {
     this.meta = new Map();       // symbol -> {sourceId, sourceName, mode, status, updatedAt}
     this.sourceName = new Map(); // sourceId -> name
     this.adapters = new Map();   // sourceId -> adapter 实例，stop() 时统一关闭
+    // start:aigc. 记录各适配器上报的源站状态文本（如 rtj 的"源站标记闭盘"），
+    // 供 snapshot 在 last-known 时区分"收盘停更"与"连接中断"文案
+    this.adapterStatus = new Map(); // sourceId -> 最近状态文本
+    // end:aigc.
   }
   attach(adapter) {
     this.sourceName.set(adapter.id, adapter.name);
@@ -25,6 +29,9 @@ export class Quotes {
     const stop = adapter.start({
       onQuote: (tick) => this.selector.ingest(tick.symbol, adapter.id, tick),
       onFailure: (symbol, err) => this.selector.markFailure(symbol, adapter.id, err),
+      // start:aigc. 透传源站状态文本（无此回调的适配器如 sina 自动忽略）
+      onStatus: (text) => this.adapterStatus.set(adapter.id, text),
+      // end:aigc.
     });
     if (typeof stop === 'function') adapter._stop = stop;
     return adapter;

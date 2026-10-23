@@ -75,7 +75,14 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
     }else{const m=quotes.meta.get(row.name);if(m){out.source=m.sourceId;out.sourceName=m.sourceName;out.sourceMode=m.mode;}}
     if(usedTimes.length){const oldest=Math.min(...usedTimes);out.updatedAt=new Date(oldest).toISOString();if(now-oldest>staleMs)out.stale=true;}
     if(issues.length){out.reason=[...new Set(issues)].join('；');out.stale=true;}
-    else if(sourceDown){out.stale=true;out.reason='行情源中断，显示最后有效报价';}
+    else if(sourceDown){
+      // start:aigc. 文案细分：last-known 时若引用源上报"闭盘"（如上金所周五收盘停推），
+      // 显示收盘语义；否则用中性的"停更"（可能是收盘/停推/断线，数据侧无法总是区分）
+      const srcIds=[...new Set(referenced.map((s)=>quotes.meta.get(s)?.sourceId).filter(Boolean))];
+      const closed=srcIds.length>0&&srcIds.every((id)=>(quotes.adapterStatus.get(id)??'').includes('闭盘'));
+      out.stale=true;out.reason=closed?'已收盘，显示收盘价':'行情已停更，显示最后有效报价';
+    }
+    // end:aigc.
     else if(out.stale)out.reason='源报价超过60秒未更新，请核实';
     return out;
   });

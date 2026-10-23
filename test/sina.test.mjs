@@ -3,18 +3,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSinaQuotes, parseSinaText } from '../src/sina.mjs';
 
-test('parseSinaText 解析美元指数与沪金主力字段', () => {
+test('parseSinaText 解析美元指数与沪金主力字段（实盘报文格式）', () => {
   const quotes = buildSinaQuotes([
     { symbol: '美元指数', sources: [{ sourceId: 'sina', code: 'DINIW' }] },
     { symbol: '沪金主力', sources: [{ sourceId: 'sina', code: 'nf_AU0' }] },
   ]);
-  const raw = 'hq_str_DINIW="15:00:00,103.5,103.55,103.4,103.6,103.2,103.5";\n'
-    + 'hq_str_nf_AU0="沪金主力,15:00:00,4116.0,4120.0,4110.0,4112.0,887.0,888.0";';
-  const ticks = parseSinaText(raw, quotes);
+  // 报文取自 2026-10-23 收盘时段实盘探针：DINIW [10]=日期 [0]=HH:mm:ss；nf_AU0 [17]=日期 [1]=HHmmss 无冒号
+  const raw = 'hq_str_DINIW="16:11:03,101.7436,101.7436,101.6219,3414,101.6241,101.8304,101.4890,101.7436,美元指数,2026-10-23";\n'
+    + 'hq_str_nf_AU0="黄金连续,150000,880.000,881.000,858.080,864.360,864.160,864.360,864.360,869.200,886.380,1,1,198578.000,286554,沪,黄金,2026-10-23,1";';
+  const now = Date.parse('2026-10-23T16:11:10+08:00');
+  const ticks = parseSinaText(raw, quotes, now);
   const diniw = ticks.find((t) => t.symbol === '美元指数');
-  assert.equal(diniw.buy, 103.5); assert.equal(diniw.sell, 103.55);
+  assert.equal(diniw.buy, 101.7436); assert.equal(diniw.sell, 101.7436);
+  assert.equal(diniw.time, Date.parse('2026-10-23T16:11:03+08:00'));
   const au = ticks.find((t) => t.symbol === '沪金主力');
-  assert.equal(au.buy, 887.5); assert.equal(au.sell, 888.0); // mid(887,888)=887.5
+  assert.equal(au.buy, 864.26); assert.equal(au.sell, 864.36); // mid(864.160,864.360)
+  // T01 核心断言：收盘后报文时间停在收盘时刻（150000），tick.time 不再被轮询时间续命
+  assert.equal(au.time, Date.parse('2026-10-23T15:00:00+08:00'), '收盘停更：源时间=收盘时刻而非抓取时间');
 });
 
 test('港汇 fx_susdhkd 字段映射解析', () => {
@@ -51,21 +56,10 @@ test('T02：源时间明显晚于当前的异常报文整条丢弃', () => {
   assert.equal(ticks.length, 0, '未来时间的报文必须整条丢弃');
 });
 
-test('T01：无日期接口三天候选构造源时间（正常/休市缓存/跨零点）', () => {
-  const quotes = buildSinaQuotes([{ symbol: '美元指数', sources: [{ sourceId: 'sina', code: 'DINIW' }] }]);
-  const raw = (t) => `hq_str_DINIW="${t},103.5,103.55,103.4,103.6,103.2,103.5,103.6";`;
-  // 正常时段：报文时间 3 分钟前 → time 取报文时间而非抓取时间
-  const now = Date.parse('2026-10-23T10:00:00+08:00');
-  let [t] = parseSinaText(raw('09:57:00'), quotes, now);
-  assert.equal(t.time, Date.parse('2026-10-23T09:57:00+08:00'), '正常时段取报文时间');
-  // 休市缓存：报文时间停在昨日下午收盘 → 构造出旧绝对时间，时差自然超 staleMs 暴露过期
-  [t] = parseSinaText(raw('15:00:00'), quotes, now);
-  assert.equal(t.time, Date.parse('2026-10-22T15:00:00+08:00'), '缓存报文得到最近的旧绝对时间（昨天候选）');
-  // 跨零点：凌晨 00:05 收到昨日 23:59 报文 → 选前一天候选，不误拼成未来 24 小时
-  const midnight = Date.parse('2026-10-23T00:05:00+08:00');
-  [t] = parseSinaText(raw('23:59:00'), quotes, midnight);
-  assert.equal(t.time, Date.parse('2026-10-22T23:59:00+08:00'), '跨零点选前一天候选');
-});
+// start:aigc.
+// T01 实盘修正：nf_/DINIW 报文自带真实日期（[17]/[10]），直接走 timeFields 精确路径，
+// 无需三天候选兜底（原 timeOnly 方案基于"报文无日期"的错误假设，已随实盘探针修正移除）。
+// end:aigc.
 // end:aigc.
 
 test('共用 code 的报文同时服务多个基础行情（hf_XPT → 美铂金/伦敦铂）', () => {

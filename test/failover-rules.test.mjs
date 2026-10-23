@@ -63,8 +63,24 @@ test('全部失效保留最后一组完整报价并标过期（规则6，R09）'
   const row = snapshot(cfg, q, { now: 1001 }).rows[0];
   assert.equal(row.buy, '100.00'); assert.equal(row.sell, '101.00');
   assert.equal(row.stale, true, 'last-known 必须标过期');
-  assert.equal(row.reason, '行情源中断，显示最后有效报价');
+  assert.equal(row.reason, '行情已停更，显示最后有效报价');
 });
+
+// start:aigc.
+test('源站闭盘时 last-known 显示收盘文案（T 系列文案细分）', () => {
+  const q = new Quotes({ baseQuotes: [BQ('X', [SRC('a', 1)])] });
+  // 模拟 rtj 上报"源站标记闭盘"（上金所周五收盘停推场景）
+  q.adapterStatus.set('a', '源站标记闭盘');
+  q.ingestTest('a', 'X', { buy: 100, sell: 101, time: 1000 }, 1000);
+  q.failTest('a', 'X', '停更');
+  q.publish(1001);
+  const cfg = { version: 1, brand: {}, openMode: 'open', schedule: ['','','','','','',''],
+    categories: [{ id: 'c1', name: 'X', visible: true, buyFormula: '【#X#回购价】', sellFormula: '【#X#销售价】', highFormula: '', lowFormula: '', decimals: 2, rounding: 'half-up' }] };
+  const row = snapshot(cfg, q, { now: 1001 }).rows[0];
+  assert.equal(row.stale, true);
+  assert.equal(row.reason, '已收盘，显示收盘价', '源站闭盘态下用收盘语义而非中断');
+});
+// end:aigc.
 
 // start:aigc.
 test('全部失效保留最后一组完整报价而非残缺单侧（规则6/F02）', () => {
@@ -79,7 +95,7 @@ test('全部失效保留最后一组完整报价而非残缺单侧（规则6/F02
   const cfg = { version: 1, brand: {}, openMode: 'open', schedule: ['','','','','','',''], categories: [CAT('X类', '【#X#回购价】', '【#X#销售价】')] };
   const row = snapshot(cfg, q, { now: 2001 }).rows[0];
   assert.equal(row.stale, true);
-  assert.equal(row.reason, '行情源中断，显示最后有效报价');
+  assert.equal(row.reason, '行情已停更，显示最后有效报价');
 });
 
 test('last-known 源自身单侧化时仍返回完整组而非残缺 tick（F02 闭环）', () => {
