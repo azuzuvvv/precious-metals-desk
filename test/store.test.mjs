@@ -111,6 +111,11 @@ test('已迁移库幂等补登记新浪外盘备援（R03）', () => {
       const b = rows.find((r) => r.symbol === sym);
       assert.ok(b.sources.some((s) => s.sourceId === 'sina' && s.code.startsWith('hf_')), `${sym} 应有新浪备援`);
     }
+    // 上金所同口径备援（gds_ 系列）
+    for (const [sym, code] of [['黄金TD','gds_AUTD'],['白银TD','gds_AGTD'],['黄金9999','gds_AU9999']]) {
+      const b = rows.find((r) => r.symbol === sym);
+      assert.ok(b.sources.some((s) => s.sourceId === 'sina' && s.code === code), `${sym} 应有 ${code} 备援`);
+    }
     store.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

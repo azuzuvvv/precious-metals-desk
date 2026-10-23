@@ -17,6 +17,11 @@ const SINA_QMAP = {
   hf_SI: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
   hf_XPT: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
   hf_XPD: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
+  // gds_ 上金所系列（R03 备援）：字段结构与 hf_ 一致（实测与 SGE_ 接口交叉验证）。
+  // gds_AU9995/gds_PT9995 数据停更或买价为 0，质量差不接入。
+  gds_AUTD: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
+  gds_AGTD: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
+  gds_AU9999: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
   // end:aigc.
 };
 const number = (v) => { const n = Number(v); return Number.isFinite(n) && n !== 0 ? n : null; };

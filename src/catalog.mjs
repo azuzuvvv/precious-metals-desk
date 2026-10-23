@@ -27,10 +27,25 @@ export const BASE_QUOTES = [
   { symbol: '铂金', name: '铂金', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'split', code: 'JZJ_pt' }] },
   { symbol: '钯金', name: '钯金', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'split', code: 'JZJ_pd' }] },
   { symbol: '铑金', name: '铑金', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'split', code: 'RH_JZL' }] },
-  { symbol: '黄金TD', name: '黄金T+D', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Au(T+D)' }] },
-  { symbol: '黄金9999', name: '黄金9999', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Au99.99' }] },
+  { symbol: '黄金TD', name: '黄金T+D', unit: '元/克', decimals: 2, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Au(T+D)' },
+    // start:aigc. R03 新浪上金所备援（同品种同口径）
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'gds_AUTD' },
+    // end:aigc.
+  ] },
+  { symbol: '黄金9999', name: '黄金9999', unit: '元/克', decimals: 2, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Au99.99' },
+    // start:aigc. R03 新浪上金所备援（同品种同口径）
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'gds_AU9999' },
+    // end:aigc.
+  ] },
   { symbol: '黄金9995', name: '黄金9995', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Au99.95' }] },
-  { symbol: '白银TD', name: '白银T+D', unit: '元/千克', decimals: 0, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Ag(T+D)' }] },
+  { symbol: '白银TD', name: '白银T+D', unit: '元/千克', decimals: 0, sources: [
+    { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Ag(T+D)' },
+    // start:aigc. R03 新浪上金所备援（同品种同口径）
+    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'gds_AGTD' },
+    // end:aigc.
+  ] },
   { symbol: '铂金9995', name: '铂金9995', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Pt99.95' }] },
   { symbol: '美黄金', name: '美黄金', unit: '美元/盎司', decimals: 1, sources: [
     { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'GLNC' },

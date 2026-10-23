@@ -100,13 +100,14 @@ export class Store{
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   // start:aigc.
-  // R03 备援补登记：旧种子迁移过的库补上新浪外盘备援映射。INSERT OR IGNORE 幂等且尊重
-  // 既有行（用户设 enabled=0 的禁用状态保留）；删除行会在重启后复活，如不想使用请禁用而非删除。
+  // R03 备援补登记：旧种子迁移过的库补上新浪备援映射（外盘 hf_ 系列 + 上金所 gds_ 系列）。
+  // INSERT OR IGNORE 幂等且尊重既有行（用户设 enabled=0 的禁用状态保留）；
+  // 删除行会在重启后复活，如不想使用请禁用而非删除。
   upgradeSinaFailover(){
-    const HF=[['伦敦金','hf_XAU'],['伦敦银','hf_XAG'],['美黄金','hf_GC'],['美白银','hf_SI'],['美铂金','hf_XPT'],['美钯金','hf_XPD'],['伦敦铂','hf_XPT'],['伦敦钯','hf_XPD']];
+    const FAILBACK=[['伦敦金','hf_XAU'],['伦敦银','hf_XAG'],['美黄金','hf_GC'],['美白银','hf_SI'],['美铂金','hf_XPT'],['美钯金','hf_XPD'],['伦敦铂','hf_XPT'],['伦敦钯','hf_XPD'],['黄金TD','gds_AUTD'],['白银TD','gds_AGTD'],['黄金9999','gds_AU9999']];
     const ins=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES (?,?,?,?,?,1)');
     this.db.exec('BEGIN IMMEDIATE');
-    try{for(const [symbol,code] of HF)ins.run(symbol,'sina',2,'sina',code);this.db.exec('COMMIT');}
+    try{for(const [symbol,code] of FAILBACK)ins.run(symbol,'sina',2,'sina',code);this.db.exec('COMMIT');}
     catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   // end:aigc.
