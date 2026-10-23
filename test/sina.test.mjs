@@ -50,6 +50,22 @@ test('T02：源时间明显晚于当前的异常报文整条丢弃', () => {
   const ticks = parseSinaText(raw, quotes, now);
   assert.equal(ticks.length, 0, '未来时间的报文必须整条丢弃');
 });
+
+test('T01：无日期接口三天候选构造源时间（正常/休市缓存/跨零点）', () => {
+  const quotes = buildSinaQuotes([{ symbol: '美元指数', sources: [{ sourceId: 'sina', code: 'DINIW' }] }]);
+  const raw = (t) => `hq_str_DINIW="${t},103.5,103.55,103.4,103.6,103.2,103.5,103.6";`;
+  // 正常时段：报文时间 3 分钟前 → time 取报文时间而非抓取时间
+  const now = Date.parse('2026-10-23T10:00:00+08:00');
+  let [t] = parseSinaText(raw('09:57:00'), quotes, now);
+  assert.equal(t.time, Date.parse('2026-10-23T09:57:00+08:00'), '正常时段取报文时间');
+  // 休市缓存：报文时间停在昨日下午收盘 → 构造出旧绝对时间，时差自然超 staleMs 暴露过期
+  [t] = parseSinaText(raw('15:00:00'), quotes, now);
+  assert.equal(t.time, Date.parse('2026-10-22T15:00:00+08:00'), '缓存报文得到最近的旧绝对时间（昨天候选）');
+  // 跨零点：凌晨 00:05 收到昨日 23:59 报文 → 选前一天候选，不误拼成未来 24 小时
+  const midnight = Date.parse('2026-10-23T00:05:00+08:00');
+  [t] = parseSinaText(raw('23:59:00'), quotes, midnight);
+  assert.equal(t.time, Date.parse('2026-10-22T23:59:00+08:00'), '跨零点选前一天候选');
+});
 // end:aigc.
 
 test('共用 code 的报文同时服务多个基础行情（hf_XPT → 美铂金/伦敦铂）', () => {

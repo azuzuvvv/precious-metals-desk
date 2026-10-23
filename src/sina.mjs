@@ -5,9 +5,12 @@
 import { normalizeTick } from './adapter.mjs';
 
 const SINA_QMAP = {
-  DINIW: { buy: 1, sell: 2, high: 6, low: 7 },             // 美元指数
-  nf_AU0: { mid: [6, 7], sell: 7, high: 3, low: 4 },       // 沪金主力：回购=买卖中间价
-  nf_AG0: { mid: [6, 7], sell: 7, high: 3, low: 4 },       // 沪银主力
+  // start:aigc. T01：DINIW/nf_ 系列报文无日期字段，timeOnly 指向 HH:mm:ss 位置，
+  // 解析时用三天候选构造绝对源时间（见 parseSinaText），休市缓存不再被轮询时间续命
+  DINIW: { buy: 1, sell: 2, high: 6, low: 7, timeOnly: 0 },     // 美元指数
+  nf_AU0: { mid: [6, 7], sell: 7, high: 3, low: 4, timeOnly: 1 }, // 沪金主力：回购=买卖中间价
+  nf_AG0: { mid: [6, 7], sell: 7, high: 3, low: 4, timeOnly: 1 }, // 沪银主力
+  // end:aigc.
   // start:aigc. fx_susdhkd 字段经 verify-live 港汇探针实测定标：
   // [1]买 [2]卖 [14]日高 [15]日低（原 high:4 取到的是持仓量 61，非价格）；[17]日期+[0]时间为源时间
   fx_susdhkd: { buy: 1, sell: 2, high: 14, low: 15, timeFields: [17, 0] },
@@ -60,6 +63,19 @@ export function parseSinaText(text, quotes, now = Date.now()) {
         // 整条丢弃不产出 tick，让旧值自然过期暴露为 stale，不产错数据
         if (parsed > now + 300000) continue;
         time = parsed;
+      }
+    } else if (map.timeOnly != null) {
+      // start:aigc. T01：无日期接口（DINIW/nf_）用报文 HH:mm:ss + 三天候选（前/当/后一天）
+      // 构造绝对源时间——取距当前最近且不明显未来的候选。休市缓存报文会得到很旧的
+      // 绝对时间，时差自然超过 staleMs 暴露为 stale，不再被每次轮询的抓取时间续命；
+      // 夜盘跨零点（凌晨收到昨日 23:5x）由前一天的候选正确兜住，不会误拼成未来 24h。
+      const hhmm = /^\d{1,2}:\d{2}(?::\d{2})?$/.test(f[map.timeOnly] ?? '') ? f[map.timeOnly] : null;
+      if (hhmm) {
+        const bjDay = (offset) => new Date(now + 8 * 3600000 + offset * 86400000).toISOString().slice(0, 10);
+        const cands = [-1, 0, 1].map((d) => Date.parse(`${bjDay(d)}T${hhmm}+08:00`)).filter(Number.isFinite);
+        const ok = cands.filter((c) => c <= now + 300000);   // 排除明显未来
+        if (ok.length) time = ok.reduce((a, b) => (Math.abs(a - now) <= Math.abs(b - now) ? a : b));
+        else if (cands.length) continue;                     // 候选全在未来：异常报文整条丢弃
       }
     }
     // end:aigc.
