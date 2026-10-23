@@ -108,13 +108,17 @@ export class Store{
   // INSERT OR IGNORE 幂等且尊重既有行（用户设 enabled=0 的禁用状态保留）；
   // 删除行会在重启后复活，如不想使用请禁用而非删除。
   upgradeSinaFailover(){
-    const FAILBACK=[['伦敦金','hf_XAU'],['伦敦银','hf_XAG'],['美黄金','hf_GC'],['美白银','hf_SI'],['美铂金','hf_XPT'],['美钯金','hf_XPD'],['伦敦铂','hf_XPT'],['伦敦钯','hf_XPD']];
-    const ins=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled,stale_ms) VALUES (?,?,?,?,?,1,120000)');
+    // 时效红线 20s（用户口径）：仅保留实测时延 ~0s 的美黄金/美白银备援（stale_ms=20s）。
+    // hf_XAU/XAG/XPT/XPD 实测 22~122s 超红线，从登记清单移除并禁用早前已插入的行（enabled=0，可再启用）。
+    const FAILBACK=[['美黄金','hf_GC'],['美白银','hf_SI']];
+    const DISCARD=[['伦敦金','hf_XAU'],['伦敦银','hf_XAG'],['美铂金','hf_XPT'],['美钯金','hf_XPD'],['伦敦铂','hf_XPT'],['伦敦钯','hf_XPD']];
+    const ins=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled,stale_ms) VALUES (?,?,?,?,?,1,20000)');
+    const dis=this.db.prepare('UPDATE base_quote_sources SET enabled=0, stale_ms=20000 WHERE symbol=? AND source_id=? AND code=?');
     this.db.exec('BEGIN IMMEDIATE');
     try{
       for(const [symbol,code] of FAILBACK)ins.run(symbol,'sina',2,'sina',code);
-      // 早前已登记的 hf_ 行补写过期阈值（尊重用户自定义值）
-      this.db.prepare("UPDATE base_quote_sources SET stale_ms=120000 WHERE source_id='sina' AND code LIKE 'hf_%' AND stale_ms IS NULL").run();
+      for(const [symbol,code] of DISCARD)dis.run(symbol,'sina',code);
+      this.db.prepare("UPDATE base_quote_sources SET stale_ms=20000 WHERE source_id='sina' AND code IN ('hf_GC','hf_SI') AND stale_ms IS NULL").run();
       this.db.exec('COMMIT');
     }
     catch(e){this.db.exec('ROLLBACK');throw e;}

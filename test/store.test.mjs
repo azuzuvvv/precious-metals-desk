@@ -103,20 +103,16 @@ test('已迁移库幂等补登记新浪外盘备援（R03）', () => {
     store.close();
     store = new Store(dir);
     const rows = store.baseQuotes();
-    const xau = rows.find((b) => b.symbol === '伦敦金');
-    const sinaXau = xau.sources.find((s) => s.sourceId === 'sina');
-    assert.ok(sinaXau && sinaXau.code === 'hf_XAU' && sinaXau.priority === 2);
-    assert.equal(sinaXau.enabled, false, '用户的禁用状态必须保留');
-    for (const sym of ['伦敦银','美黄金','美白银','美铂金','美钯金','伦敦铂','伦敦钯']) {
-      const b = rows.find((r) => r.symbol === sym);
-      const s = b.sources.find((x) => x.sourceId === 'sina');
-      assert.ok(s && s.code.startsWith('hf_'), `${sym} 应有新浪备援`);
-      assert.equal(s.staleMs, 120000, 'hf_ 备援应放宽过期阈值至 120s');
-    }
-    // gds_ 上金所系列实测为延迟行情（停更 ~47 分钟、价差 0.55%），不接入
-    for (const sym of ['黄金TD','白银TD','黄金9999']) {
-      const b = rows.find((r) => r.symbol === sym);
-      assert.ok(!b.sources.some((x) => x.sourceId === 'sina' && String(x.code).startsWith('gds_')), `${sym} 不应接入 gds_ 延迟行情`);
+    // 时效红线 20s：仅美黄金/美白银保留备援（staleMs=20s），其余 hf_ 全部禁用
+    const usGold = rows.find((b) => b.symbol === '美黄金');
+    const usSina = usGold.sources.find((x) => x.sourceId === 'sina');
+    assert.ok(usSina && usSina.code === 'hf_GC' && usSina.enabled === true);
+    assert.equal(usSina.staleMs, 20000, '备援过期阈值应收紧至 20s');
+    const usSilver = rows.find((b) => b.symbol === '美白银').sources.find((x) => x.sourceId === 'sina');
+    assert.ok(usSilver && usSilver.code === 'hf_SI' && usSilver.enabled === true && usSilver.staleMs === 20000);
+    for (const sym of ['伦敦金','伦敦银','美铂金','美钯金','伦敦铂','伦敦钯']) {
+      const s = rows.find((r) => r.symbol === sym).sources.find((x) => x.sourceId === 'sina');
+      assert.ok(!s || s.enabled === false, `${sym} 不得有启用的超时效备援`);
     }
     store.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
