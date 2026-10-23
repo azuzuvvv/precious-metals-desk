@@ -61,8 +61,10 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
       const expr=row[`${field}Formula`];out[field]=null;if(!expr)continue;
       for(const ref of references(expr)){
         const sym=ref.slice(2,ref.lastIndexOf('#'));
-        // 引用目标是品类名而非基础行情（meta 无此键）：值不可得，行级提示（M06）
-        if(categoryNames.has(sym)&&!quotes.meta.has(sym))catRef=sym;
+        // 引用目标是品类名而非基础行情（meta 无此键）：值不可得（M06）
+        // F01：仅买卖字段引用品类才升行级提示——高低字段引用不得拖垮健康买卖报价
+        //（规则5/F03：高低是辅助字段，缺失只显示 --）
+        if((field==='buy'||field==='sell')&&categoryNames.has(sym)&&!quotes.meta.has(sym))catRef=sym;
         const m=quotes.meta.get(sym);
         if(m&&m.updatedAt)usedTimes.push(Date.parse(m.updatedAt));
         if(m)inputMeta.push({name:sym,source:m.sourceName,time:m.updatedAt});

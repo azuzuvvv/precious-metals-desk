@@ -165,4 +165,29 @@ test('M05：旧版三层库首次升级不重跑修正（含足迹全删的最�
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 // end:aigc.
+// start:aigc.
+test('F03：建表后迁移执行前中断的库重启必须真实执行迁移', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lcjy-f03-'));
+  try {
+    let store = new Store(dir);   // 正常建库（表全部创建 + 迁移执行 + 登记）
+    // 模拟"新版首次运行在 runMigration 前中断"：清掉迁移记录并回滚修正效果
+    // （migrations 表存在但无 sinaFailover 记录；hf 映射删除模拟修正未执行）
+    store.db.exec("DELETE FROM migrations");
+    store.db.exec("DELETE FROM base_quote_sources WHERE source_id='sina' AND code IN ('hf_GC','hf_SI')");
+    store.close();
+    // 重启：migrations 表存在 → 不预置标记（修复前只查业务表会误预置）→ runMigration 真实执行
+    store = new Store(dir);
+    const rows = store.baseQuotes();
+    const usGold = rows.find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'sina');
+    assert.ok(usGold && usGold.code === 'hf_GC' && usGold.enabled === true, '中断后重启：迁移必须真实执行并恢复美黄金备援映射');
+    const usSilver = rows.find((b) => b.symbol === '美白银').sources.find((x) => x.sourceId === 'sina');
+    assert.ok(usSilver && usSilver.code === 'hf_SI', '中断后重启：美白银备援映射同样恢复');
+    // 且登记写回：再次重启不再重复执行（幂等）
+    store.close();
+    store = new Store(dir);
+    assert.ok(store.db.prepare('SELECT name FROM migrations WHERE name=?').get('sinaFailover'), '迁移执行后必须登记，后续重启跳过');
+    store.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// end:aigc.
 // end:aigc.

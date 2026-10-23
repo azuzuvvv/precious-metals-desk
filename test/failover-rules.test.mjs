@@ -66,6 +66,24 @@ test('M06：品类引用品类放行保存但快照明确提示取值为空（�
   assert.equal(b.stale, true, '手写链式公式不得静默全 --');
   assert.ok(b.reason && b.reason.includes('品类间引用暂不支持'), 'reason 必须明示原因：' + b.reason);
 });
+
+// start:aigc.
+test('F01：仅高价引用业务品类时整行保持健康（高低不拖垮买卖报价）', () => {
+  const q = new Quotes({ baseQuotes: [BQ('X', [SRC('a', 1)])] });
+  q.ingestTest('a', 'X', { buy: 100, sell: 101, high: 102, low: 99, time: 1000 }, 1000);
+  q.publish(1000);
+  // B 的买卖直连基础行情（健康），仅 highFormula 引用品类 A
+  const cfg = { version: 1, brand: {}, openMode: 'open', schedule: ['','','','','','',''],
+    categories: [
+      { id: 'c1', name: 'A', visible: true, buyFormula: '【#X#回购价】', sellFormula: '【#X#销售价】', highFormula: '', lowFormula: '', decimals: 2, rounding: 'half-up' },
+      { id: 'c2', name: 'B', visible: true, buyFormula: '【#X#回购价】', sellFormula: '【#X#销售价】', highFormula: '【#A#最高价】', lowFormula: '', decimals: 2, rounding: 'half-up' },
+    ] };
+  const b = snapshot(cfg, q, { now: 1000 }).rows.find((r) => r.name === 'B');
+  assert.equal(b.buy, '100.00'); assert.equal(b.sell, '101.00');
+  assert.equal(b.high, null, '引用品类的最高价取不到值，显示 --');
+  assert.equal(b.stale, false, '仅辅助字段（高低）引用品类不得把整行标停更（规则5/F03）');
+  assert.equal(b.reason, null);
+});
 // end:aigc.
 
 test('单基础价可派生双侧（规则2）', () => {

@@ -18,7 +18,8 @@ function render(){if(!snapshot)return;const s=snapshot;
  // end:aigc.
  const fragment=document.createDocumentFragment();for(const r of s.rows){if(hidden.has(r.id))continue;const tr=el('tr',undefined,failed?'stale':'');const name=el('td',undefined,'product');name.append(el('span',r.name));
  // start:aigc. 行内轻量标签：stale 且有原因时显示精简词（不置灰、不弹窗），移动端可见
- if(!failed&&r.stale&&r.reason)name.append(el('span',r.reason.includes('收盘')?'收盘':r.reason.includes('单边')?'单边':'停更','row-tag'));
+ // F01：补"引用"类（品类间引用暂不支持），与收盘/单边同为文案映射模式
+ if(!failed&&r.stale&&r.reason)name.append(el('span',r.reason.includes('收盘')?'收盘':r.reason.includes('单边')?'单边':r.reason.includes('引用')?'引用':'停更','row-tag'));
  // end:aigc.
  if(failed||(r.reason&&r.reason.includes('缺少'))){const note=el('button','缺少数据 ⓘ','row-note');note.setAttribute('aria-label',r.name+'行情状态');note.onclick=()=>{$('detail-title').textContent=r.name;$('detail-text').textContent=(failed?'网络已中断，以下是最后收到的价格。':'该品种暂无可用数据源')+'\n报价更新时间：'+formatTime(r.updatedAt);$('quote-detail').showModal();};name.append(note);}tr.title='报价更新时间：'+formatTime(r.updatedAt);tr.append(name);
  let color='';const midpoint=(Number(r.high)+Number(r.low))/2,main=Number(r.sell??r.buy);if(r.high!=null&&r.low!=null&&(r.sell??r.buy)!=null)color=main>midpoint?'high':main<midpoint?'low':'';
