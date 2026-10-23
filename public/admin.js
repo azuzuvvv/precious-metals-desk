@@ -50,15 +50,20 @@ if(!dirty&&catalogDirty&&catalogDraft){await saveCatalog();return;}
 const result=await api('config',{config:draft,expectedVersion:version});draft=result.config;version=result.version;// start:aigc. 品牌/目录共用版本号：保存后同步另一表单的已知版本，避免同窗口交替保存误报 409（F04） // end:aigc.
 catalogVersion=result.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;
 if(catalogDirty&&catalogDraft){
-// start:aigc. M07/F02：全量保存非原子——目录失败时分段提示（品牌已存）；F02 先回读目录
-// 版本区分"服务端拒绝"与"已提交但响应丢失"——共享版本号前进即实际已保存，同步本地
-// 状态消除歧义，避免用户重试被 409 阻断；回读自身失败（网络持续中断）保守按未保存处理
+// start:aigc. M07/F02：全量保存非原子——目录失败时分段提示（品牌已存）。F02 按错误类型三分流：
+// 409=另一窗口已保存目录（版本冲突），回读版本同样前进，若走回读会被误判成"响应丢失已保存"，
+// 把 catalogDraft 覆盖成远端内容导致本窗口修改静默丢失——必须先短路，提示刷新重载；
+// 400 等=服务端明确拒绝（校验失败），必然未提交，保留脏状态可直接重试；
+// 无 status（网络中断/超时）=可能是"已提交但响应丢失"，才回读共享版本号确认——
+// 前进即实际已保存，同步本地状态；未前进即服务端未收到，保守按未保存处理
 try{await saveCatalog();message('品牌与行情目录已一并保存。基础行情调整需重启服务后生效。');}
 catch(e){let note='品牌已保存，行情目录保存失败：'+e.message;
-try{const cur=await api('catalog');
+if(e.status===409)note='品牌已保存，行情目录保存失败：版本冲突（配置已被其他窗口修改），本窗口的目录修改未保存，请点「重新加载」获取最新目录后重新修改。';
+else if(e.status>=400)note+='（服务端已拒绝，目录仍为未保存状态，可直接重试）';
+else{try{const cur=await api('catalog');
 if(cur.version>catalogVersion){catalogVersion=cur.version;version=cur.version;catalogDraft={baseQuotes:cur.baseQuotes,sources:cur.sources,categories:cur.categories};catalogSources=cur.sources;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';$('version').textContent='配置版本 '+version;note='品牌与行情目录实际均已保存（此前失败为网络响应丢失），状态已同步。';}
-else note+='（服务端已拒绝，目录仍为未保存状态，可直接重试）';}
-catch{/* 回读也失败：网络持续中断，保守按未保存处理 */}
+else note+='（服务端未收到请求，目录仍为未保存状态，可直接重试）';}
+catch{/* 回读也失败：网络持续中断，保守按未保存处理 */}}
 message(note,true);}
 return;}
 message('品牌与营业时间已保存。');});
