@@ -40,7 +40,12 @@ export class Selector {
   _entry(symbol, sourceId) {
     const m = this.entries.get(symbol);
     if (!m) return null;
-    if (!m.has(sourceId)) m.set(sourceId, { status: DISCONNECTED, tick: null, streak: 0, err: null, everHealthy: false });
+    // start:aigc. entry 携带 per-source 过期阈值：备援源更新周期长（如新浪 hf_ 约 30~60s）时
+    // 在目录里配 staleMs 放宽，未配置回落全局 staleMs
+    if (!m.has(sourceId)) {
+      const cfg = this.config.get(symbol)?.find((s) => s.sourceId === sourceId);
+      m.set(sourceId, { status: DISCONNECTED, tick: null, streak: 0, err: null, everHealthy: false, staleMs: cfg?.staleMs ?? null });
+    }
     return m.get(sourceId);
   }
   _enabled(symbol, sourceId) {
@@ -75,7 +80,8 @@ export class Selector {
       let changed = false;
       for (const src of list) {
         const e = this.entries.get(symbol)?.get(src.sourceId);
-        if (e && e.status === HEALTHY && e.tick && now - e.tick.time > this.staleMs) {
+        // start:aigc. per-source 过期阈值优先，未配置回落全局（备援源更新周期长时放宽）
+        if (e && e.status === HEALTHY && e.tick && now - e.tick.time > (e.staleMs ?? this.staleMs)) {
           e.status = STALE; e.streak = 0; e.err = '超时未更新'; changed = true;
         }
       }

@@ -109,12 +109,14 @@ test('已迁移库幂等补登记新浪外盘备援（R03）', () => {
     assert.equal(sinaXau.enabled, false, '用户的禁用状态必须保留');
     for (const sym of ['伦敦银','美黄金','美白银','美铂金','美钯金','伦敦铂','伦敦钯']) {
       const b = rows.find((r) => r.symbol === sym);
-      assert.ok(b.sources.some((s) => s.sourceId === 'sina' && s.code.startsWith('hf_')), `${sym} 应有新浪备援`);
+      const s = b.sources.find((x) => x.sourceId === 'sina');
+      assert.ok(s && s.code.startsWith('hf_'), `${sym} 应有新浪备援`);
+      assert.equal(s.staleMs, 120000, 'hf_ 备援应放宽过期阈值至 120s');
     }
-    // 上金所同口径备援（gds_ 系列）
-    for (const [sym, code] of [['黄金TD','gds_AUTD'],['白银TD','gds_AGTD'],['黄金9999','gds_AU9999']]) {
+    // gds_ 上金所系列实测为延迟行情（停更 ~47 分钟、价差 0.55%），不接入
+    for (const sym of ['黄金TD','白银TD','黄金9999']) {
       const b = rows.find((r) => r.symbol === sym);
-      assert.ok(b.sources.some((s) => s.sourceId === 'sina' && s.code === code), `${sym} 应有 ${code} 备援`);
+      assert.ok(!b.sources.some((x) => x.sourceId === 'sina' && String(x.code).startsWith('gds_')), `${sym} 不应接入 gds_ 延迟行情`);
     }
     store.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }

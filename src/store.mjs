@@ -21,7 +21,10 @@ export class Store{
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS admin (id INTEGER PRIMARY KEY CHECK(id=1), hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS audit (version INTEGER PRIMARY KEY, at TEXT NOT NULL, summary TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL);');
     // start:aigc.
     // 三层行情模型建表：数据源(sources)、基础行情(base_quotes)、基础行情与数据源映射(base_quote_sources)、业务品类(categories)与切换日志(switch_log)。
-    this.db.exec('CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, poll_ms INTEGER, timeout_ms INTEGER, stale_ms INTEGER, last_success_at TEXT, last_error TEXT); CREATE TABLE IF NOT EXISTS base_quotes (symbol TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, enabled INTEGER NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS base_quote_sources (symbol TEXT NOT NULL, source_id TEXT NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL, code TEXT, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (symbol, source_id)); CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, visible INTEGER NOT NULL DEFAULT 1, buy_formula TEXT NOT NULL DEFAULT \'\', sell_formula TEXT NOT NULL DEFAULT \'\', high_formula TEXT NOT NULL DEFAULT \'\', low_formula TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, rounding TEXT NOT NULL DEFAULT \'half-up\', sort INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS switch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, symbol TEXT NOT NULL, old_source TEXT, new_source TEXT, mode TEXT, reason TEXT); CREATE TABLE IF NOT EXISTS source_secrets (source_id TEXT PRIMARY KEY, secret_ciphertext TEXT NOT NULL);');
+    this.db.exec('CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, poll_ms INTEGER, timeout_ms INTEGER, stale_ms INTEGER, last_success_at TEXT, last_error TEXT); CREATE TABLE IF NOT EXISTS base_quotes (symbol TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, enabled INTEGER NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS base_quote_sources (symbol TEXT NOT NULL, source_id TEXT NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL, code TEXT, enabled INTEGER NOT NULL DEFAULT 1, stale_ms INTEGER, PRIMARY KEY (symbol, source_id)); CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, visible INTEGER NOT NULL DEFAULT 1, buy_formula TEXT NOT NULL DEFAULT \'\', sell_formula TEXT NOT NULL DEFAULT \'\', high_formula TEXT NOT NULL DEFAULT \'\', low_formula TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, rounding TEXT NOT NULL DEFAULT \'half-up\', sort INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS switch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, symbol TEXT NOT NULL, old_source TEXT, new_source TEXT, mode TEXT, reason TEXT); CREATE TABLE IF NOT EXISTS source_secrets (source_id TEXT PRIMARY KEY, secret_ciphertext TEXT NOT NULL);');
+    // end:aigc.
+    // start:aigc. 旧版本已建 base_quote_sources 无 stale_ms 列，幂等补列（列已存在时忽略报错）
+    try{this.db.exec('ALTER TABLE base_quote_sources ADD COLUMN stale_ms INTEGER');}catch{/* 列已存在 */}
     // end:aigc.
     if(!this.db.prepare('SELECT id FROM settings WHERE id=1').get()){
       const defaults=validateConfig(JSON.parse(readFileSync(new URL('./defaults.json',import.meta.url),'utf8').replace(/^\uFEFF/,'')));
@@ -70,10 +73,11 @@ export class Store{
       const insertSource=this.db.prepare('INSERT OR IGNORE INTO sources (id,name,type,enabled,priority) VALUES (?,?,?,?,?)');
       for(const s of SOURCES)insertSource.run(s.id,s.name,s.type,s.enabled?1:0,0);
       const insertBq=this.db.prepare('INSERT OR IGNORE INTO base_quotes (symbol,name,unit,decimals,enabled) VALUES (?,?,?,?,1)');
-      const insertBqs=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES (?,?,?,?,?,1)');
+      // start:aigc. 迁移写入 per-source 过期阈值 stale_ms（新浪 hf_ 备援更新周期长，放宽至 120s）
+      const insertBqs=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled,stale_ms) VALUES (?,?,?,?,?,1,?)');
       for(const bq of BASE_QUOTES){
         insertBq.run(bq.symbol,bq.name,bq.unit,bq.decimals);
-        for(const s of bq.sources)insertBqs.run(bq.symbol,s.sourceId,s.priority,s.kind,s.code??null);
+        for(const s of bq.sources)insertBqs.run(bq.symbol,s.sourceId,s.priority,s.kind,s.code??null,s.staleMs??null);
       }
       // 业务品类：港金公式替换为换算口径。
       // 迁移源用现有生效配置（settings.rows，用户可能已改过基差/自定义品类/排序），
@@ -104,10 +108,15 @@ export class Store{
   // INSERT OR IGNORE 幂等且尊重既有行（用户设 enabled=0 的禁用状态保留）；
   // 删除行会在重启后复活，如不想使用请禁用而非删除。
   upgradeSinaFailover(){
-    const FAILBACK=[['伦敦金','hf_XAU'],['伦敦银','hf_XAG'],['美黄金','hf_GC'],['美白银','hf_SI'],['美铂金','hf_XPT'],['美钯金','hf_XPD'],['伦敦铂','hf_XPT'],['伦敦钯','hf_XPD'],['黄金TD','gds_AUTD'],['白银TD','gds_AGTD'],['黄金9999','gds_AU9999']];
-    const ins=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES (?,?,?,?,?,1)');
+    const FAILBACK=[['伦敦金','hf_XAU'],['伦敦银','hf_XAG'],['美黄金','hf_GC'],['美白银','hf_SI'],['美铂金','hf_XPT'],['美钯金','hf_XPD'],['伦敦铂','hf_XPT'],['伦敦钯','hf_XPD']];
+    const ins=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled,stale_ms) VALUES (?,?,?,?,?,1,120000)');
     this.db.exec('BEGIN IMMEDIATE');
-    try{for(const [symbol,code] of FAILBACK)ins.run(symbol,'sina',2,'sina',code);this.db.exec('COMMIT');}
+    try{
+      for(const [symbol,code] of FAILBACK)ins.run(symbol,'sina',2,'sina',code);
+      // 早前已登记的 hf_ 行补写过期阈值（尊重用户自定义值）
+      this.db.prepare("UPDATE base_quote_sources SET stale_ms=120000 WHERE source_id='sina' AND code LIKE 'hf_%' AND stale_ms IS NULL").run();
+      this.db.exec('COMMIT');
+    }
     catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   // end:aigc.
@@ -115,7 +124,9 @@ export class Store{
   baseQuotes(){
     const base=this.db.prepare('SELECT * FROM base_quotes ORDER BY symbol').all();
     const srows=this.db.prepare('SELECT * FROM base_quote_sources ORDER BY symbol, priority').all();
-    return base.map((b)=>({...b,enabled:!!b.enabled,sources:srows.filter((s)=>s.symbol===b.symbol).map((s)=>({sourceId:s.source_id,priority:s.priority,kind:s.kind,code:s.code,enabled:!!s.enabled}))}));
+    // start:aigc. 读取含 per-source 过期阈值 staleMs（未配置为 null，选择器回落全局默认）
+    return base.map((b)=>({...b,enabled:!!b.enabled,sources:srows.filter((s)=>s.symbol===b.symbol).map((s)=>({sourceId:s.source_id,priority:s.priority,kind:s.kind,code:s.code,enabled:!!s.enabled,staleMs:s.stale_ms}))}));
+    // end:aigc.
   }
   categories(){
     return this.db.prepare('SELECT id,name,visible,buy_formula AS buyFormula,sell_formula AS sellFormula,high_formula AS highFormula,low_formula AS lowFormula,decimals,rounding,sort FROM categories ORDER BY sort').all()
@@ -167,8 +178,9 @@ export class Store{
       else this.db.exec('DELETE FROM base_quotes');
       // 来源映射：整体重建
       this.db.exec('DELETE FROM base_quote_sources');
-      const insS=this.db.prepare('INSERT INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES (?,?,?,?,?,?)');
-      for(const b of baseQuotes)for(const s of(b.sources||[]))insS.run(b.symbol,s.sourceId,s.priority,s.kind,s.code??null,s.enabled===false?0:1);
+      // start:aigc. 重建映射保留 per-source 过期阈值（admin 编辑不丢失 staleMs）
+      const insS=this.db.prepare('INSERT INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled,stale_ms) VALUES (?,?,?,?,?,?,?)');
+      for(const b of baseQuotes)for(const s of(b.sources||[]))insS.run(b.symbol,s.sourceId,s.priority,s.kind,s.code??null,s.enabled===false?0:1,s.staleMs??null);
       const nextVersion=current.version+1;
       this.db.prepare('UPDATE settings SET version=? WHERE id=1').run(nextVersion);
       const after=JSON.stringify({baseQuotes:this.baseQuotes(),categories:this.categories()});

@@ -152,4 +152,21 @@ test('停用基础行情不产出报价并清理残留（R07）', () => {
   assert.equal(q.prices.get('【#Y#回购价】'), undefined, '停用的基础行情不得发布');
   assert.equal(q.meta.has('Y'), false);
 });
+
+// start:aigc.
+test('per-source 过期阈值：备援源放宽 staleMs 后不被全局 45s 误判', () => {
+  const q = new Quotes({ baseQuotes: [BQ('X', [
+    { sourceId: 'a', priority: 1, enabled: true },
+    { sourceId: 'b', priority: 2, enabled: true, staleMs: 120000 }, // 备援源更新周期长，放宽
+  ])] });
+  q.ingestTest('b', 'X', { buy: 90, sell: 91, time: 1000 }, 1000);
+  q.failTest('a', 'X', '断线');
+  // 全局 staleMs=45s 会判 b 过期；放宽到 120s 后 t+60s 仍健康接管
+  q.publish(61000);
+  assert.equal(q.meta.get('X').sourceId, 'b', '放宽阈值的备援在 60s 时仍应接管');
+  // t+121s 超过 120s 后仍会过期回退 last-known
+  q.publish(122000);
+  assert.equal(q.meta.get('X').mode, 'last-known', '超过放宽阈值后仍应过期');
+});
+// end:aigc.
 // end:aigc.
