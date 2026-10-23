@@ -115,7 +115,13 @@ export class Selector {
   getTick(symbol) {
     const sel = this.selected.get(symbol);
     if (!sel?.sourceId) return null;
-    return this.entries.get(symbol)?.get(sel.sourceId)?.tick ?? null;
+    const entry = this.entries.get(symbol)?.get(sel.sourceId);
+    if (!entry) return null;
+    // start:aigc.
+    // last-known 回退时返回完整组缓存（F02 语义闭环）：残缺单侧 tick 不得顶替最后完整报价
+    // end:aigc.
+    if (sel.mode === 'last-known') return entry.complete ?? entry.tick ?? null;
+    return entry.tick ?? null;
   }
   state(symbol, now = Date.now()) {
     const sel = this.selected.get(symbol) ?? { sourceId: null, mode: null };

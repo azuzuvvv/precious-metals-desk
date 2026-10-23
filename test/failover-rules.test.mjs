@@ -82,6 +82,17 @@ test('全部失效保留最后一组完整报价而非残缺单侧（规则6/F02
   assert.equal(row.reason, '行情源中断，显示最后有效报价');
 });
 
+test('last-known 源自身单侧化时仍返回完整组而非残缺 tick（F02 闭环）', () => {
+  const q = new Quotes({ baseQuotes: [BQ('X', [SRC('a', 1), SRC('b', 2)])], categories: [CAT('X类', '【#X#回购价】', '【#X#销售价】')] });
+  q.ingestTest('a', 'X', { buy: 100, sell: 101, time: 1000 }, 1000);  // a 完整组
+  q.ingestTest('a', 'X', { buy: 105, time: 2000 }, 2000);             // a 退化为单侧（PS 停推）
+  q.failTest('b', 'X', '断线');                                        // b 无数据 → 无健康完整源
+  q.publish(2001);
+  assert.equal(q.meta.get('X').mode, 'last-known');
+  assert.equal(q.prices.get('【#X#回购价】').value, '100', '必须用完整组而非残缺单侧');
+  assert.equal(q.prices.get('【#X#销售价】').value, '101');
+});
+
 test('高低缺失显示空且不拖垮买卖报价（规则5/F03）', () => {
   const q = new Quotes({ baseQuotes: [BQ('X', [SRC('a', 1)])], categories: [CAT('X类', '【#X#回购价】', '【#X#销售价】', { highFormula: '【#X#最高价】', lowFormula: '【#X#最低价】' })] });
   q.ingestTest('a', 'X', { buy: 100, sell: 101, time: 1000 }, 1000);  // 源无高低
