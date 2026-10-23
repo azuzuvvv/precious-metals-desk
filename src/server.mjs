@@ -7,7 +7,6 @@ import {Store,passwordHash,passwordMatches,validPassword} from './store.mjs';
 // start:aigc.
 import {validateConfig,validateCatalog,snapshot} from './config.mjs';
 // end:aigc.
-import {CATALOG} from './catalog.mjs';
 // start:aigc.
 import {attachSina} from './sina.mjs';
 import {Quotes} from './quotes.mjs';
@@ -77,10 +76,10 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
         const stillAuthorized=()=>{if(session(req)!==s)throw error(401,'会话已失效，请重新登录');};
         if(req.method==='POST'&&!same(req.headers['x-csrf-token'],s.csrf))throw error(403,'页面凭据已过期，请重新登录');
         // start:aigc.
-        if(path==='/api/admin/config'&&req.method==='GET'){const config=store.config();json(res,200,{config,version:config.version,sourceCatalog:CATALOG.map(r=>({name:r.name,code:r.code,available:!!r.code&&[...aggregator.prices.keys()].some(k=>k.startsWith(`【#${r.name}#`))}))});return;}
+        if(path==='/api/admin/config'&&req.method==='GET'){const config=store.config();json(res,200,{config,version:config.version});return;} // R02：旧页签退役，不再回传 sourceCatalog
         // end:aigc.
-        // start:aigc.
-        if(path==='/api/admin/preview'&&req.method==='POST'){const data=await body(req);stillAuthorized();json(res,200,snapshot(validateConfig(data.config),aggregator,{all:true}));return;}
+        // start:aigc. 预览走真实报价路径：品类用目录草稿（R02 统一配置源）
+        if(path==='/api/admin/preview'&&req.method==='POST'){const data=await body(req);stillAuthorized();const checked=validateCatalog({sources:store.sources(),baseQuotes:store.baseQuotes(),categories:Array.isArray(data?.categories)?data.categories:[]});json(res,200,snapshot({...store.config(),categories:checked.categories},aggregator,{all:true}));return;}
         // end:aigc.
         if(path==='/api/admin/config'&&req.method==='POST'){const data=await body(req);stillAuthorized();if(!Number.isInteger(data.expectedVersion))throw error(400,'缺少配置版本');const config=store.save(validateConfig(data.config),data.expectedVersion);json(res,200,{config,version:config.version});return;}
         // start:aigc.

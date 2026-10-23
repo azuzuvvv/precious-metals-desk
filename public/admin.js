@@ -1,7 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id);
 // start:aigc.
-let csrf=null,draft=null,version=null,catalog=[],dirty=false,needsSetup=false,busy=false,catalogDraft=null,catalogVersion=null,catalogSources=[],catalogDirty=false;
+let csrf=null,draft=null,version=null,dirty=false,needsSetup=false,busy=false,catalogDraft=null,catalogVersion=null,catalogSources=[],catalogDirty=false;
 // end:aigc.
 function el(tag,text,cls){const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;}
 function message(text,isError=false){$('message').textContent=text;$('message').className=isError?'error':'';$('message').hidden=false;}
@@ -11,19 +11,7 @@ function showAuth(setup){needsSetup=setup;csrf=null;$('workspace').hidden=true;$
 // start:aigc. 目录页签复用 input() 时通过 dirtyFn 指定置脏回调（默认仍为旧配置的 changed）
 function input(labelText,value,onInput,{type='text',cls='',options=null,dirtyFn=changed}={}){const label=el('label',labelText);const field=el(options?'select':'input');if(options){for(const [v,t]of options){const op=el('option',t);op.value=v;field.append(op);}}else field.type=type;field.value=value;field.className=cls;field.setAttribute('aria-label',labelText);field.addEventListener('input',()=>{onInput(field.value);dirtyFn();});label.append(field);return label;}
 // end:aigc.
-function renderRows(){const frag=document.createDocumentFragment(),search=$('search').value.trim().toLowerCase();for(const [index,row]of draft.rows.entries()){
- if(search&&!row.name.toLowerCase().includes(search))continue;if($('only-visible').checked&&!row.visible)continue;
- const card=el('article',undefined,'row-card'+(!row.visible?' disabled':''));card.dataset.id=row.id;
- const head=el('div',undefined,'row-header'),name=el('input');name.value=row.name;name.className='row-name';name.maxLength=40;name.setAttribute('aria-label',`品种名称 ${row.id}`);name.oninput=()=>{row.name=name.value;changed();};
- const visibility=el('label',undefined,'inline'),check=el('input');check.type='checkbox';check.checked=row.visible;check.setAttribute('aria-label',`${row.name} 显示`);check.onchange=()=>{row.visible=check.checked;card.classList.toggle('disabled',!check.checked);changed();};visibility.append(check,el('span','显示'));
- head.append(name,el('span','#'+row.id,'row-id'),visibility);const tools=el('div',undefined,'row-tools');
- for(const [text,delta]of [['上移',-1],['下移',1]]){const button=el('button',text);button.disabled=index+delta<0||index+delta>=draft.rows.length;button.setAttribute('aria-label',`${row.name} ${text}`);button.onclick=()=>{[draft.rows[index],draft.rows[index+delta]]=[draft.rows[index+delta],draft.rows[index]];changed();renderRows();};tools.append(button);}
- const remove=el('button','删除');remove.setAttribute('aria-label',`${row.name} 删除`);remove.onclick=()=>{if(confirm(`从新盘配置删除“${row.name}”？保存后生效。`)){draft.rows.splice(index,1);changed();renderRows();}};tools.append(remove);head.append(tools);card.append(head);
- const fields=el('div',undefined,'row-fields');for(const [key,title]of [['buyFormula','回购公式'],['sellFormula','销售公式'],['highFormula','最高公式'],['lowFormula','最低公式']]){const label=input(title,row[key],v=>row[key]=v,{cls:'formula'});label.querySelector('input').setAttribute('aria-label',`${row.name} ${title}`);fields.append(label);}
- fields.append(input('小数位',row.decimals,v=>row.decimals=Number(v),{options:Array.from({length:7},(_,i)=>[i,String(i)])}),input('舍入方式',row.rounding,v=>row.rounding=v,{options:[['half-up','四舍五入'],['floor','向下取整'],['ceil','向上取整']]}));card.append(fields);frag.append(card);
- }$('row-list').replaceChildren(frag);if(!frag.childNodes.length&&!$('row-list').children.length)$('row-list').append(el('p','没有匹配的品种。','hint'));}
 function renderBrand(){const fields=$('brand-fields');fields.replaceChildren();for(const [key,title]of [['name','品牌名称'],['subtitle','副标题'],['notice','滚动公告'],['footer','地址 / 页脚说明'],['phone','联系电话']]){const label=input(title,draft.brand[key],v=>draft.brand[key]=v);if(key==='notice'||key==='footer')label.className='wide';fields.append(label);}$('open-mode').value=draft.openMode;$('open-mode').onchange=()=>{draft.openMode=$('open-mode').value;changed();};$('schedule-fields').replaceChildren();['周日','周一','周二','周三','周四','周五','周六'].forEach((day,i)=>$('schedule-fields').append(input(day,draft.schedule[i],v=>draft.schedule[i]=v)));}
-function renderCatalog(){$('catalog').replaceChildren(...catalog.map(c=>{const box=el('div');box.append(el('strong',c.name+' '),el('span',c.available?'已收到行情':'暂未取得行情',c.available?'available':'missing'),el('div',`【#${c.name}#销售价】`));return box;}));}
 // start:aigc.
 // 行情目录页签：加载/渲染三元目录与切换日志，保存走版本化乐观锁。
 async function loadCatalog(){const data=await api('catalog');catalogDraft={baseQuotes:data.baseQuotes,categories:data.categories};catalogSources=data.sources;catalogVersion=data.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';renderCatalogSources();renderCatalogBase();renderCatalogRows();}
@@ -33,17 +21,23 @@ function renderCatalogBase(){const frag=document.createDocumentFragment();for(co
 function renderCatalogRows(){const frag=document.createDocumentFragment();for(const c of catalogDraft.categories){const card=el('article',undefined,'row-card'+(!c.visible?' disabled':''));const head=el('div',undefined,'row-header');const name=el('input');name.value=c.name;name.className='row-name';name.maxLength=40;name.setAttribute('aria-label',`品类名称 ${c.id}`);name.oninput=()=>{c.name=name.value;catalogChanged();};const vis=el('label',undefined,'inline');const ck=el('input');ck.type='checkbox';ck.checked=c.visible;ck.setAttribute('aria-label',`${c.name} 显示`);ck.onchange=()=>{c.visible=ck.checked;card.classList.toggle('disabled',!ck.checked);catalogChanged();};vis.append(ck,el('span','显示'));head.append(name,el('span','#'+c.id,'row-id'),vis);card.append(head);const fields=el('div',undefined,'row-fields');for(const [key,title] of [['buyFormula','回购公式'],['sellFormula','销售公式'],['highFormula','最高公式'],['lowFormula','最低公式']])fields.append(input(title,c[key],v=>c[key]=v,{cls:'formula',dirtyFn:catalogChanged}));fields.append(input('小数位',c.decimals,v=>c.decimals=Number(v),{options:Array.from({length:7},(_,i)=>[i,String(i)]),dirtyFn:catalogChanged}),input('舍入方式',c.rounding,v=>c.rounding=v,{options:[['half-up','四舍五入'],['floor','向下取整'],['ceil','向上取整']],dirtyFn:catalogChanged}));card.append(fields);frag.append(card);}$('catalog-rows').replaceChildren(frag);}
 async function loadSwitchLogs(){const data=await api('switch-logs');$('switch-log-list').replaceChildren(...data.entries.map(e=>{const d=el('div',undefined,'history-entry');d.append(el('time',new Date(e.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})),el('strong',e.symbol),el('span',`${e.old_source??'无'} → ${e.new_source??'无'}（${e.mode??''}）${e.reason?' · '+e.reason:''}`));return d;}));if(!data.entries.length)$('switch-log-list').append(el('p','尚无来源切换记录。'));}
 // end:aigc.
-async function load(){const data=await api('config');draft=data.config;version=data.version;catalog=data.sourceCatalog;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;$('auth').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;$('loading').hidden=true;renderRows();renderBrand();renderCatalog();}
+// start:aigc. R02：旧「品种与基差」页签退役，config 仅承载品牌/营业时间（rows 冻结回传不展示）
+async function load(){const data=await api('config');draft=data.config;version=data.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;$('auth').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;$('loading').hidden=true;renderBrand();}
+// end:aigc.
 async function task(button,work){if(busy)return;busy=true;button.disabled=true;try{await work();}catch(e){message(e.message,true);}finally{busy=false;button.disabled=false;}}
 $('auth-form').onsubmit=event=>{event.preventDefault();task($('auth-submit'),async()=>{if(needsSetup&&$('password').value!==$('confirm-password').value)throw Error('两次密码输入不一致');const result=await api(needsSetup?'setup':'login',{password:$('password').value,...(needsSetup?{setupToken:$('setup-token').value.trim()}:{})});csrf=result.csrf;$('auth-form').reset();await load();$('message').hidden=true;});};
 // start:aigc. 重新加载同样拦截目录未保存修改
 // end:aigc.
-$('reload').onclick=()=>task($('reload'),async()=>{if((dirty||catalogDirty)&&!confirm('放弃尚未保存的修改，重新加载已保存配置？'))return;await load();message('已加载最新配置。');});
-$('save').onclick=()=>task($('save'),async()=>{const result=await api('config',{config:draft,expectedVersion:version});draft=result.config;version=result.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;message('保存成功，新盘已按此版本报价。');});
-$('preview').onclick=()=>task($('preview'),async()=>{const data=await api('preview',{config:draft});$('preview-body').replaceChildren(...data.rows.map(r=>{const tr=el('tr');for(const value of [r.name+(r.visible?'':'（隐藏）'),r.buy??'--',r.sell??'--',`${r.high??'--'} / ${r.low??'--'}`,r.reason||(r.stale?'报价过期':'正常')])tr.append(el('td',value));return tr;}));$('preview-status').textContent=`${new Date(data.serverTime).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} · ${data.status.connected?'行情已连接':'行情未连接'} · ${data.status.sourceStatus}`;$('preview-dialog').showModal();});
+// start:aigc. reload 后品牌与目录一起重载（reload 自带 confirm 守卫；目录加载失败不阻塞品牌加载）
+$('reload').onclick=()=>task($('reload'),async()=>{if((dirty||catalogDirty)&&!confirm('放弃尚未保存的修改，重新加载已保存配置？'))return;await load();await loadCatalog().catch(()=>{});message('已加载最新配置。');});
+// end:aigc.
+// start:aigc. R02：本保存路径仅剩品牌与营业时间（rows 原样回传冻结）
+$('save').onclick=()=>task($('save'),async()=>{const result=await api('config',{config:draft,expectedVersion:version});draft=result.config;version=result.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;message('品牌与营业时间已保存。');});
+// end:aigc.
+// start:aigc. 预览目录草稿：走与公开报价一致的 categories 路径（R02）
+$('preview').onclick=()=>task($('preview'),async()=>{if(!catalogDraft){message('请先在「行情目录」页签加载目录',true);return;}const data=await api('preview',{categories:catalogDraft.categories});$('preview-body').replaceChildren(...data.rows.map(r=>{const tr=el('tr');for(const value of [r.name+(r.visible?'':'（隐藏）'),r.buy??'--',r.sell??'--',`${r.high??'--'} / ${r.low??'--'}`,r.reason||(r.stale?'报价过期':'正常')])tr.append(el('td',value));return tr;}));$('preview-status').textContent=`${new Date(data.serverTime).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} · ${data.status.connected?'行情已连接':'行情未连接'} · ${data.status.sourceStatus}`;$('preview-dialog').showModal();});
+// end:aigc.
 $('close-preview').onclick=()=>$('preview-dialog').close();
-$('search').oninput=renderRows;$('only-visible').onchange=renderRows;
-$('add-row').onclick=()=>{draft.rows.unshift({id:'custom-'+Date.now(),name:'新黄金品种',visible:false,buyFormula:'【#黄金#回购价】',sellFormula:'【#黄金#销售价】',highFormula:'【#黄金#最高价】',lowFormula:'【#黄金#最低价】',decimals:2,rounding:'half-up'});$('search').value='';$('only-visible').checked=false;changed();renderRows();};
 async function history(){const data=await api('audit');$('history-list').replaceChildren(...data.entries.map(e=>{const entry=el('div',undefined,'history-entry');entry.append(el('strong','v'+e.version),el('time',new Date(e.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})),el('span',e.summary));return entry;}));if(!data.entries.length)$('history-list').append(el('p','尚无修改记录。'));}
 $('refresh-history').onclick=()=>task($('refresh-history'),history);
 // start:aigc.

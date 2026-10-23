@@ -28,7 +28,9 @@ test('new admin is isolated, authenticated, versioned and persistent',async()=>{
     const config=structuredClone(initial.config);config.rows[0].sellFormula='【#黄金#销售价】+4';
     const noCsrf=await call('/api/admin/config',{config,expectedVersion:initial.version},{'x-csrf-token':''});assert.equal(noCsrf.status,403);
     assert.equal((await call('/api/admin/config',{config,expectedVersion:initial.version},{origin:'https://evil.example'})).status,403);
-    assert.equal((await call('/api/admin/preview',{config})).status,200);
+    // start:aigc. 预览改收目录草稿（R02 统一配置源）
+    assert.equal((await call('/api/admin/preview',{categories:(await call('/api/admin/catalog')).data.categories})).status,200);
+    // end:aigc.
     assert.equal((await call('/api/admin/config')).data.version,initial.version);
     const save=await call('/api/admin/config',{config,expectedVersion:initial.version});assert.equal(save.status,200);
     assert.equal((await call('/api/admin/config',{config,expectedVersion:initial.version})).status,409);
@@ -98,6 +100,22 @@ test('admin 可读取来源状态、切换日志并保存三元目录',async()=>
     ghost.categories.push({id:'nope',name:'幽灵',visible:true,buyFormula:'',sellFormula:'',highFormula:'',lowFormula:'',decimals:2,rounding:'half-up'});
     assert.equal((await call('/api/admin/catalog',{...ghost,expectedVersion:save.data.version})).status,400);
     assert.equal((await call('/api/admin/catalog')).data.categories.length,catalog.categories.length);
+    // start:aigc.
+    // 保存目录必须实际影响公开报价（R02 验收：不止配置读回）
+    const quotesApp=app;
+    const q=quotesApp.quotes;
+    q.selector.configure(app.store.baseQuotes()); // 注入的聚合层未按目录建连：先注册候选来源（等价生产 start()），否则 ingest 会被 Selector 拒绝
+    q.ingestTest('rtj','黄金',{buy:100,sell:101,high:110,low:95,time:Date.now()});
+    q.publish();
+    const edited2=structuredClone((await call('/api/admin/catalog')).data);
+    edited2.categories.find((c)=>c.name==='黄金').sellFormula='【#黄金#销售价】+5';
+    const ver=(await call('/api/admin/catalog')).data.version;
+    assert.equal((await call('/api/admin/catalog',{...edited2,expectedVersion:ver})).status,200);
+    const quotes=await (await fetch(base+'/api/quotes')).json();
+    const goldRow=quotes.rows.find((r)=>r.name==='黄金');
+    assert.equal(goldRow.buy,'100.00');
+    assert.equal(goldRow.sell,'106.00','目录保存后公开报价必须按新基差计算');
+    // end:aigc.
     // 目录保存写入审计
     assert.ok((await call('/api/admin/audit')).data.entries.some((e)=>e.summary==='更新行情目录'));
   }finally{await app.close();rmSync(dir,{recursive:true,force:true});}
