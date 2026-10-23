@@ -8,7 +8,9 @@ const SINA_QMAP = {
   DINIW: { buy: 1, sell: 2, high: 6, low: 7 },             // 美元指数
   nf_AU0: { mid: [6, 7], sell: 7, high: 3, low: 4 },       // 沪金主力：回购=买卖中间价
   nf_AG0: { mid: [6, 7], sell: 7, high: 3, low: 4 },       // 沪银主力
-  fx_susdhkd: { buy: 1, sell: 2, high: 4, low: 5 },        // 美元兑港元（字段以探针实测为准）
+  // start:aigc. fx_susdhkd 字段经 verify-live 港汇探针实测定标：
+  // [1]买 [2]卖 [14]日高 [15]日低（原 high:4 取到的是持仓量 61，非价格）；[17]日期+[0]时间为源时间
+  fx_susdhkd: { buy: 1, sell: 2, high: 14, low: 15, timeFields: [17, 0] },
   // start:aigc. hf_ 外盘系列（R03 备援）：字段位经 scripts/probe-sina-hf.mjs 与融通金实测校准
   // [2]买 [3]卖 [4]高 [5]低 [12]日期+[6]时间（北京时间）。伦敦铂/钯以纽约系近似口径兜底。
   hf_XAU: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
@@ -17,11 +19,7 @@ const SINA_QMAP = {
   hf_SI: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
   hf_XPT: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
   hf_XPD: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
-  // gds_ 上金所系列（R03 备援）：字段结构与 hf_ 一致（实测与 SGE_ 接口交叉验证）。
-  // gds_AU9995/gds_PT9995 数据停更或买价为 0，质量差不接入。
-  gds_AUTD: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
-  gds_AGTD: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
-  gds_AU9999: { buy: 2, sell: 3, high: 4, low: 5, timeFields: [12, 6] },
+  // gds_ 上金所系列实测为延迟行情（黄金TD 停在 09:56、价差 0.55%），不适合做备援，不接入。
   // end:aigc.
 };
 const number = (v) => { const n = Number(v); return Number.isFinite(n) && n !== 0 ? n : null; };

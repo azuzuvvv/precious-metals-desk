@@ -19,10 +19,14 @@ test('parseSinaText 解析美元指数与沪金主力字段', () => {
 
 test('港汇 fx_susdhkd 字段映射解析', () => {
   const quotes = buildSinaQuotes([{ symbol: '美元兑港元', sources: [{ sourceId: 'sina', code: 'fx_susdhkd' }] }]);
-  const raw = 'hq_str_fx_susdhkd="17:59:59,7.8450,7.8460,7.8440,7.8480,7.8430,7.8460";';
-  const [t] = parseSinaText(raw, quotes);
+  // 字段布局取自 verify-live 港汇探针实盘报文（18 字段）
+  const raw = 'hq_str_fx_susdhkd="11:11:21,7.841400,7.841900,7.835800,61,7.836100,7.841900,7.835800,7.841400,USDHKD,0.070000,0.005600,0.0007784,,7.849100,7.781500,,2026-10-23";';
+  const [t] = parseSinaText(raw, quotes, 1792725082143);
   assert.equal(t.symbol, '美元兑港元');
-  assert.equal(t.buy, 7.8450); assert.equal(t.sell, 7.8460);
+  assert.equal(t.buy, 7.8414); assert.equal(t.sell, 7.8419);
+  assert.equal(t.high, 7.8491, '日高取 [14]，不是持仓量位 [4]');
+  assert.equal(t.low, 7.7815, '日低取 [15]');
+  assert.equal(t.time, Date.parse('2026-10-23T11:11:21'), '源日期[17]+时间[0]组合');
 });
 // start:aigc.
 test('hf_XAU 外盘字段映射与源时间解析', () => {
