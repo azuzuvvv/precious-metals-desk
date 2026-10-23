@@ -21,7 +21,7 @@ export class Store{
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS admin (id INTEGER PRIMARY KEY CHECK(id=1), hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS audit (version INTEGER PRIMARY KEY, at TEXT NOT NULL, summary TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL);');
     // start:aigc.
     // 三层行情模型建表：数据源(sources)、基础行情(base_quotes)、基础行情与数据源映射(base_quote_sources)、业务品类(categories)与切换日志(switch_log)。
-    this.db.exec('CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, poll_ms INTEGER, timeout_ms INTEGER, stale_ms INTEGER, last_success_at TEXT, last_error TEXT); CREATE TABLE IF NOT EXISTS base_quotes (symbol TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, enabled INTEGER NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS base_quote_sources (symbol TEXT NOT NULL, source_id TEXT NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL, code TEXT, enabled INTEGER NOT NULL DEFAULT 1, stale_ms INTEGER, PRIMARY KEY (symbol, source_id)); CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, visible INTEGER NOT NULL DEFAULT 1, buy_formula TEXT NOT NULL DEFAULT \'\', sell_formula TEXT NOT NULL DEFAULT \'\', high_formula TEXT NOT NULL DEFAULT \'\', low_formula TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, rounding TEXT NOT NULL DEFAULT \'half-up\', sort INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS switch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, symbol TEXT NOT NULL, old_source TEXT, new_source TEXT, mode TEXT, reason TEXT); CREATE TABLE IF NOT EXISTS source_secrets (source_id TEXT PRIMARY KEY, secret_ciphertext TEXT NOT NULL);');
+    this.db.exec('CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, poll_ms INTEGER, timeout_ms INTEGER, stale_ms INTEGER, last_success_at TEXT, last_error TEXT); CREATE TABLE IF NOT EXISTS base_quotes (symbol TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, enabled INTEGER NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS base_quote_sources (symbol TEXT NOT NULL, source_id TEXT NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL, code TEXT, enabled INTEGER NOT NULL DEFAULT 1, stale_ms INTEGER, PRIMARY KEY (symbol, source_id)); CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, visible INTEGER NOT NULL DEFAULT 1, buy_formula TEXT NOT NULL DEFAULT \'\', sell_formula TEXT NOT NULL DEFAULT \'\', high_formula TEXT NOT NULL DEFAULT \'\', low_formula TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, rounding TEXT NOT NULL DEFAULT \'half-up\', sort INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS switch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, symbol TEXT NOT NULL, old_source TEXT, new_source TEXT, mode TEXT, reason TEXT); CREATE TABLE IF NOT EXISTS source_secrets (source_id TEXT PRIMARY KEY, secret_ciphertext TEXT NOT NULL); CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, at TEXT NOT NULL);');
     // end:aigc.
     // start:aigc. 旧版本已建 base_quote_sources 无 stale_ms 列，幂等补列（列已存在时忽略报错）
     try{this.db.exec('ALTER TABLE base_quote_sources ADD COLUMN stale_ms INTEGER');}catch{/* 列已存在 */}
@@ -36,8 +36,9 @@ export class Store{
     // start:aigc.
     // 构造末尾执行一次目录迁移，已迁移过(sources 已有数据)时内部直接返回，不重复迁移。
     this.migrateCatalog();
-    // R03：旧种子迁移过的库补上新浪外盘备援映射（幂等，见 upgradeSinaFailover）。
-    this.upgradeSinaFailover();
+    // R03：旧种子迁移过的库补上新浪外盘备援映射。
+    // T07：一次性数据修正经 migrations 表登记只执行一次，迁移后运行期尊重用户目录。
+    this.runMigration('sinaFailover', () => this.upgradeSinaFailover());
     // end:aigc.
   }
   hasAdmin(){return !!this.db.prepare('SELECT id FROM admin WHERE id=1').get();}
@@ -104,24 +105,34 @@ export class Store{
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   // start:aigc.
-  // R03 备援补登记：旧种子迁移过的库补上新浪备援映射（外盘 hf_ 系列 + 上金所 gds_ 系列）。
-  // INSERT OR IGNORE 幂等且尊重既有行（用户设 enabled=0 的禁用状态保留）；
-  // 删除行会在重启后复活，如不想使用请禁用而非删除。
+  // T07 版本化一次性迁移：migrations 表登记，已执行过的名字直接跳过。
+  // 此前 upgradeSinaFailover 每次启动都跑，用户删除的映射会复活、手动启用的
+  // DISCARD 项会被重启强制禁回——与后台"永久删除/可再启用"的产品语义矛盾。
+  // 事务与登记同一事务提交：执行成功必然留痕，留痕即不再执行。
+  runMigration(name, fn) {
+    if (this.db.prepare('SELECT name FROM migrations WHERE name=?').get(name)) return false;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      fn();
+      this.db.prepare('INSERT INTO migrations VALUES(?,?)').run(name, new Date().toISOString());
+      this.db.exec('COMMIT');
+      return true;
+    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+  }
+  // end:aigc.
+  // start:aigc.
+  // R03 备援补登记（T07 版本化，经 runMigration 只执行一次，内部不再开事务）：
+  // 旧种子迁移过的库补上新浪备援映射（外盘 hf_ 系列）。
+  // 时效红线 20s（用户口径）：仅保留实测时延 ~0s 的美黄金/美白银备援（stale_ms=20s）。
+  // hf_XAU/XAG/XPT/XPD 实测 22~122s 超红线，从登记清单移除并禁用早前已插入的行（enabled=0，可再启用）。
   upgradeSinaFailover(){
-    // 时效红线 20s（用户口径）：仅保留实测时延 ~0s 的美黄金/美白银备援（stale_ms=20s）。
-    // hf_XAU/XAG/XPT/XPD 实测 22~122s 超红线，从登记清单移除并禁用早前已插入的行（enabled=0，可再启用）。
     const FAILBACK=[['美黄金','hf_GC'],['美白银','hf_SI']];
     const DISCARD=[['伦敦金','hf_XAU'],['伦敦银','hf_XAG'],['美铂金','hf_XPT'],['美钯金','hf_XPD'],['伦敦铂','hf_XPT'],['伦敦钯','hf_XPD']];
     const ins=this.db.prepare('INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled,stale_ms) VALUES (?,?,?,?,?,1,20000)');
     const dis=this.db.prepare('UPDATE base_quote_sources SET enabled=0, stale_ms=20000 WHERE symbol=? AND source_id=? AND code=?');
-    this.db.exec('BEGIN IMMEDIATE');
-    try{
-      for(const [symbol,code] of FAILBACK)ins.run(symbol,'sina',2,'sina',code);
-      for(const [symbol,code] of DISCARD)dis.run(symbol,'sina',code);
-      this.db.prepare("UPDATE base_quote_sources SET stale_ms=20000 WHERE source_id='sina' AND code IN ('hf_GC','hf_SI') AND stale_ms IS NULL").run();
-      this.db.exec('COMMIT');
-    }
-    catch(e){this.db.exec('ROLLBACK');throw e;}
+    for(const [symbol,code] of FAILBACK)ins.run(symbol,'sina',2,'sina',code);
+    for(const [symbol,code] of DISCARD)dis.run(symbol,'sina',code);
+    this.db.prepare("UPDATE base_quote_sources SET stale_ms=20000 WHERE source_id='sina' AND code IN ('hf_GC','hf_SI') AND stale_ms IS NULL").run();
   }
   // end:aigc.
   sources(){return this.db.prepare('SELECT * FROM sources ORDER BY id').all();}

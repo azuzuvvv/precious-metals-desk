@@ -117,4 +117,26 @@ test('已迁移库幂等补登记新浪外盘备援（R03）', () => {
     store.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// start:aigc.
+test('一次性迁移登记后不再覆盖用户目录操作（T07）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lcjy-mig-'));
+  try {
+    let store = new Store(dir);   // 首次启动：migrateCatalog + sinaFailover 迁移执行并登记
+    // 模拟用户后续操作：启用迁移中被禁用的伦敦金备援 + 删除美黄金的新浪备援
+    store.db.prepare("INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled,stale_ms) VALUES ('伦敦金','sina',2,'sina','hf_XAU',1,20000)").run();
+    store.db.prepare("UPDATE base_quote_sources SET enabled=1 WHERE symbol='伦敦金' AND source_id='sina'").run();
+    store.db.prepare("DELETE FROM base_quote_sources WHERE symbol='美黄金' AND source_id='sina'").run();
+    store.close();
+    // 重启：迁移已登记必须跳过——启用不复活禁用、删除不复活行
+    store = new Store(dir);
+    const rows = store.baseQuotes();
+    const hkSina = rows.find((b) => b.symbol === '伦敦金').sources.find((x) => x.sourceId === 'sina');
+    assert.ok(hkSina && hkSina.enabled === true, '用户手动启用的备援不得被重启强制禁回');
+    const usSina = rows.find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'sina');
+    assert.ok(!usSina, '用户删除的映射不得在重启后复活');
+    store.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// end:aigc.
 // end:aigc.
