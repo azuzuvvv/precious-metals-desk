@@ -139,4 +139,30 @@ test('一次性迁移登记后不再覆盖用户目录操作（T07）', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 // end:aigc.
+// start:aigc.
+test('M05：旧版三层库首次升级不重跑修正（含足迹全删的最坏场景）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lcjy-legacy-'));
+  try {
+    let store = new Store(dir);   // 建成三层库（模拟旧版创建的库）
+    // 模拟旧版运营期的用户状态：删除美黄金备援、手动启用伦敦金 hf_XAU 备援
+    store.db.prepare("DELETE FROM base_quote_sources WHERE symbol='美黄金' AND source_id='sina'").run();
+    store.db.prepare("INSERT OR IGNORE INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled,stale_ms) VALUES ('伦敦金','sina',2,'sina','hf_XAU',1,20000)").run();
+    // 模拟"旧版库"：T07 之前的版本没有 migrations 表（同时覆盖足迹全删的歧义场景）
+    store.db.exec('DROP TABLE migrations');
+    store.close();
+    // 升级启动：检测到 base_quote_sources 表存在而无 migrations 表 → 预置完成标记，不重跑修正
+    store = new Store(dir);
+    const rows = store.baseQuotes();
+    const usSina = rows.find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'sina');
+    assert.ok(!usSina, '旧库升级：用户删除的映射不得复活（哪怕迁移足迹已全部消失）');
+    const hkSina = rows.find((b) => b.symbol === '伦敦金').sources.find((x) => x.sourceId === 'sina');
+    assert.ok(hkSina && hkSina.enabled === true, '旧库升级：用户手动启用的备援不得被禁回');
+    // 预置标记后，后续重启同样稳定跳过
+    store.close();
+    store = new Store(dir);
+    assert.ok(!store.baseQuotes().find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'sina'));
+    store.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// end:aigc.
 // end:aigc.

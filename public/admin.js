@@ -44,7 +44,12 @@ $('reload').onclick=()=>task($('reload'),async()=>{if((dirty||catalogDirty)&&!co
 // 此按钮以为目录已存——检测到目录有未保存修改时自动一并保存，消除"点了没反应"陷阱
 $('save').onclick=()=>task($('save'),async()=>{const result=await api('config',{config:draft,expectedVersion:version});draft=result.config;version=result.version;// start:aigc. 品牌/目录共用版本号：保存后同步另一表单的已知版本，避免同窗口交替保存误报 409（F04） // end:aigc.
 catalogVersion=result.version;dirty=false;$('dirty-state').textContent='已保存';$('dirty-state').className='';$('version').textContent='配置版本 '+version;
-if(catalogDirty&&catalogDraft){const r2=await api('catalog',{...catalogDraft,expectedVersion:catalogVersion});catalogVersion=r2.version;version=r2.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';$('version').textContent='配置版本 '+version;message('品牌与行情目录已一并保存。基础行情调整需重启服务后生效。');return;}
+if(catalogDirty&&catalogDraft){
+// start:aigc. M07：全量保存非原子——目录失败时明确分段结果（品牌已存/目录未存），
+// 脏状态保持、版本号已同步，重试只需再点保存，避免用户误以为全部未生效
+try{const r2=await api('catalog',{...catalogDraft,expectedVersion:catalogVersion});catalogVersion=r2.version;version=r2.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';$('version').textContent='配置版本 '+version;message('品牌与行情目录已一并保存。基础行情调整需重启服务后生效。');}
+catch(e){message('品牌已保存，行情目录保存失败：'+e.message+'（目录仍为未保存状态，可直接重试）',true);}
+return;}
 message('品牌与营业时间已保存。');});
 // end:aigc.
 // start:aigc. 预览目录草稿：走与公开报价一致的 categories 路径（R02）

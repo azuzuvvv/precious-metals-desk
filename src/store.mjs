@@ -21,7 +21,14 @@ export class Store{
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS admin (id INTEGER PRIMARY KEY CHECK(id=1), hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS audit (version INTEGER PRIMARY KEY, at TEXT NOT NULL, summary TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL);');
     // start:aigc.
     // 三层行情模型建表：数据源(sources)、基础行情(base_quotes)、基础行情与数据源映射(base_quote_sources)、业务品类(categories)与切换日志(switch_log)。
+    // M05：建 migrations 表前判定"旧版三层库"——base_quote_sources 表已存在而无 migrations 表，
+    // 说明该库由 T07 之前的版本创建（旧版 upgradeSinaFailover 无条件每次启动执行，必然已修正过）。
+    // 为其预置 sinaFailover 完成标记，以"最后一次旧版启动状态"为基线，
+    // 避免新版首次启动重跑修正导致用户删除的映射复活/手动启用的项被禁回。
+    // 全新库与旧 feed 库（两表均由下方语句新建）不预置，正常走 runMigration 登记。
+    const legacyThreeLayer=!!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='base_quote_sources'").get();
     this.db.exec('CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, poll_ms INTEGER, timeout_ms INTEGER, stale_ms INTEGER, last_success_at TEXT, last_error TEXT); CREATE TABLE IF NOT EXISTS base_quotes (symbol TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, enabled INTEGER NOT NULL DEFAULT 1); CREATE TABLE IF NOT EXISTS base_quote_sources (symbol TEXT NOT NULL, source_id TEXT NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL, code TEXT, enabled INTEGER NOT NULL DEFAULT 1, stale_ms INTEGER, PRIMARY KEY (symbol, source_id)); CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, visible INTEGER NOT NULL DEFAULT 1, buy_formula TEXT NOT NULL DEFAULT \'\', sell_formula TEXT NOT NULL DEFAULT \'\', high_formula TEXT NOT NULL DEFAULT \'\', low_formula TEXT NOT NULL DEFAULT \'\', decimals INTEGER NOT NULL DEFAULT 2, rounding TEXT NOT NULL DEFAULT \'half-up\', sort INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS switch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, symbol TEXT NOT NULL, old_source TEXT, new_source TEXT, mode TEXT, reason TEXT); CREATE TABLE IF NOT EXISTS source_secrets (source_id TEXT PRIMARY KEY, secret_ciphertext TEXT NOT NULL); CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, at TEXT NOT NULL);');
+    if(legacyThreeLayer)this.db.prepare('INSERT OR IGNORE INTO migrations VALUES(?,?)').run('sinaFailover',new Date().toISOString());
     // end:aigc.
     // start:aigc. 旧版本已建 base_quote_sources 无 stale_ms 列，幂等补列（列已存在时忽略报错）
     try{this.db.exec('ALTER TABLE base_quote_sources ADD COLUMN stale_ms INTEGER');}catch{/* 列已存在 */}
