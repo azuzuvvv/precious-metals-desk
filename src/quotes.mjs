@@ -3,11 +3,17 @@
 // prices 键格式与旧 feed 一致（【#symbol#字段】），snapshot 无需改读法。
 import { Selector } from './selector.mjs';
 import { FIELD_LABELS } from './catalog.mjs';
+// start:aigc.
+import { references } from './formula.mjs';
+// end:aigc.
 
 export class Quotes {
-  constructor({ baseQuotes = [], staleMs = 45000, onSwitch = null } = {}) {
+  constructor({ baseQuotes = [], categories = [], staleMs = 45000, onSwitch = null } = {}) {
     this.selector = new Selector({ staleMs, onSwitch });
-    this.selector.configure(baseQuotes);
+    // start:aigc.
+    // 从品类公式提取每个基础行情的必需字段并集（F01）：候选源必须覆盖全部必需字段才算完整。
+    this.selector.configure(baseQuotes, computeRequired(baseQuotes, categories));
+    // end:aigc.
     this.prices = new Map();     // 【#symbol#字段】 -> {value:String, time}
     this.meta = new Map();       // symbol -> {sourceId, sourceName, mode, status, updatedAt}
     this.sourceName = new Map(); // sourceId -> name
@@ -51,7 +57,32 @@ export class Quotes {
     }
     for (const s of this.meta.keys()) if (!active.has(s)) this.meta.delete(s);
   }
+  // start:aigc.
+  // 目录保存后重算字段需求（公式引用可能变化），保留连接状态
+  updateRequirements(categories) { this.selector.setRequired(computeRequired([...this.selector.config.keys()].map((symbol) => ({ symbol })), categories)); }
+  // end:aigc.
   // 优先用 start() 返回的清理函数（适配器可只返回清理函数不实现 stop 方法），回落到 stop()
   stop() { for (const a of this.adapters.values()) (a._stop ?? a.stop)?.(); this.adapters.clear(); }
 }
 // end:aigc.
+
+// start:aigc.
+// 计算各基础行情的必需字段：遍历品类买卖公式的引用【#symbol#字段】，聚合每个 symbol 的字段并集。
+// 高低价是辅助字段（规则5/F03）：高低公式的引用不计入必需集——缺失/停更只显示 --，不拖垮买卖报价。
+// 软引用（未登记 symbol）与未识别字段标签忽略。
+// end:aigc.
+export function computeRequired(baseQuotes, categories) {
+  const required = new Map(baseQuotes.map((b) => [b.symbol, new Set()]));
+  const byLabel = new Map(Object.entries(FIELD_LABELS).map(([f, label]) => [label, f]));
+  for (const c of categories || []) {
+    for (const key of ['buyFormula', 'sellFormula']) {
+      const expr = (c?.[key] ?? '').trim(); if (!expr) continue;
+      for (const ref of references(expr)) {
+        const last = ref.lastIndexOf('#');
+        const field = byLabel.get(ref.slice(last + 1, -1));
+        if (field) required.get(ref.slice(2, last))?.add(field);
+      }
+    }
+  }
+  return new Map([...required].map(([s, set]) => [s, set]));
+}

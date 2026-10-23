@@ -24,8 +24,9 @@ export function createRtj({map=[],onQuote=()=>{},onFailure=()=>{},onStatus=()=>{
     buf[tick.symbol]={fields:merged};
     const cur=buf[tick.symbol].fields;
     if(cur.buy!==undefined||cur.sell!==undefined){
-      // 输出时间取各字段中最旧时间：任一侧停更，整组随最旧一侧过期（R04）
-      const time=Math.min(...Object.values(cur).map((x)=>x.t));
+      // 买卖侧（buy/sell）是核心字段：输出时间取其最旧，高低缺失/停更不拖垮买卖新鲜度（F03）
+      const core=['buy','sell'].filter((f)=>cur[f]!==undefined);
+      const time=Math.min(...core.map((f)=>cur[f].t));
       const out={symbol:tick.symbol,time};
       for(const [f,x] of Object.entries(cur))out[f]=x.v;
       try{handleQuote(normalizeTick(tick.symbol,out));}

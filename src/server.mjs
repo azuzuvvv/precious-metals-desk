@@ -26,7 +26,7 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
   // 注入聚合层实例（测试）时不连网。来源切换写运行日志（switch_log 表）。
   // publish 由 1 秒定时器驱动，把选定 tick 刷成公式键与来源元数据。
   const baseQuotes=store.baseQuotes();
-  const aggregator=quotes??new Quotes({baseQuotes,onSwitch:(e)=>store.appendSwitchLog({...e,reason:'来源切换'})});
+  const aggregator=quotes??new Quotes({baseQuotes,categories:store.categories(),onSwitch:(e)=>store.appendSwitchLog({...e,reason:'来源切换'})});
   let stopSina=null,stopTimer=null,started=false;
   const start=()=>{
     if(started)return stopTimer;   // 幂等：重复 start 不重复建连，避免旧 WebSocket/轮询/定时器泄漏
@@ -93,6 +93,7 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
           if(!Number.isInteger(data.expectedVersion))throw error(400,'缺少目录版本');
           validateCatalog(data);
           const version=store.saveCatalog(data.baseQuotes,data.categories,data.expectedVersion);
+          aggregator.updateRequirements(store.categories()); // 品类公式变化后立即刷新字段需求
           json(res,200,{ok:true,version});return;
         }
         // end:aigc.

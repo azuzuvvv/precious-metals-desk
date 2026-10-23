@@ -63,7 +63,8 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
         if(m&&((m.mode!=='primary'&&m.mode!=='failover')||(m.status&&m.status!=='healthy')))sourceDown=true;
         const item=quotes.prices.get(ref);if(item)usedTimes.push(item.time);
       }
-      try{out[field]=calculate(expr,values,row.decimals,row.rounding);}catch(e){issues.push(e.message);}
+      // 高低求值失败仅显示 --，不标过期不设原因（规则5/F03）；买卖失败才计入 issues
+      try{out[field]=calculate(expr,values,row.decimals,row.rounding);}catch(e){if(field==='buy'||field==='sell')issues.push(e.message);}
     }
     const referenced=[...new Set(FORMULAS.map((k)=>row[k]).filter(Boolean).flatMap((e)=>references(e)).map((r)=>r.slice(2,r.lastIndexOf('#'))))];
     out.derived=referenced.length>0&&referenced.some((s)=>s!==row.name);
