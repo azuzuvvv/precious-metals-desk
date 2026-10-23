@@ -98,7 +98,9 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
         }
         // end:aigc.
         if(path==='/api/admin/audit'&&req.method==='GET'){json(res,200,{entries:store.audit()});return;}
-        if(path==='/api/admin/export'&&req.method==='GET'){res.setHeader('content-disposition','attachment; filename="lcjy-config.json"');json(res,200,store.config());return;}
+        // start:aigc. 完整导出（R11）：品牌/营业 + 实际生效的行情目录（品类/基础行情/来源映射，不含密钥密文）
+        if(path==='/api/admin/export'&&req.method==='GET'){res.setHeader('content-disposition','attachment; filename="lcjy-config.json"');json(res,200,{...store.config(),categories:store.categories(),baseQuotes:store.baseQuotes(),sources:store.sources()});return;}
+        // end:aigc.
         if(path==='/api/admin/logout'&&req.method==='POST'){sessions.delete(cookie(req));res.setHeader('set-cookie',`lcjy_session=; HttpOnly;${secure} SameSite=Strict; Path=/; Max-Age=0`);json(res,200,{ok:true});return;}
         if(path==='/api/admin/password'&&req.method==='POST'){rateLimit(req);const data=await body(req);stillAuthorized();const oldHash=store.getHash();if(!await passwordMatches(data.oldPassword,oldHash))throw error(403,'原密码错误');validPassword(data.newPassword);const newHash=await passwordHash(data.newPassword);stillAuthorized();if(store.getHash()!==oldHash)throw error(409,'密码已在其他会话中更新');store.setPassword(newHash);sessions.clear();json(res,200,{ok:true});return;}
       }

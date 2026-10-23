@@ -136,6 +136,12 @@ test('admin 可读取来源状态、切换日志并保存三元目录',async()=>
     // end:aigc.
     // 目录保存写入审计
     assert.ok((await call('/api/admin/audit')).data.entries.some((e)=>e.summary==='更新行情目录'));
+    // start:aigc. 导出含实际生效目录（R11）：改目录后导出必须反映当前品类与基础行情
+    const exported=(await call('/api/admin/export')).data;
+    assert.ok(Array.isArray(exported.categories)&&exported.categories.length>0);
+    assert.ok(exported.categories.some((c)=>c.name==='黄金'));
+    assert.ok(exported.baseQuotes.some((b)=>b.symbol==='probe-x'),'导出需反映目录新增的基础行情');
+    // end:aigc.
   }finally{await app.close();rmSync(dir,{recursive:true,force:true});}
 });
 // end:aigc.
