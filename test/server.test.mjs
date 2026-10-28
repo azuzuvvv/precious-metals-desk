@@ -4,9 +4,27 @@ import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {request} from 'node:http';
-import {createApp} from '../src/server.mjs';
+import {createApp,buildRtjMap} from '../src/server.mjs';
 // start:aigc.
 import {Quotes} from '../src/quotes.mjs';
+// end:aigc.
+// start:aigc.
+// MySQL 改造适配：src/server.mjs 的 createApp 不支持注入 store/db 参数，内部 Store.create 走默认
+// env 配置（DB_*）。为隔离，采用最小侵入方案：每个用例前自建独立测试库，通过 DB_* 环境变量
+// 注入（含 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD，保证连接用户与建库用户一致），用例结束恢复
+// 原环境变量并 DROP 库。注意不能用"先 createTestStore 再改 DB_NAME"方式——createApp 会另建池。
+import {beforeEach,afterEach} from 'node:test';
+import {createTestDatabase,dropTestDatabase,testDbEnv} from './helpers.mjs';
+let testDbName,prevEnv;
+beforeEach(async()=>{
+  prevEnv=['DB_HOST','DB_PORT','DB_USER','DB_PASSWORD','DB_NAME'].map((k)=>[k,process.env[k]]);
+  testDbName=await createTestDatabase();
+  for(const [k,v] of Object.entries(testDbEnv(testDbName)))process.env[k]=v;
+});
+afterEach(async()=>{
+  for(const [k,v] of prevEnv){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+  await dropTestDatabase(testDbName);
+});
 // end:aigc.
 
 test('new admin is isolated, authenticated, versioned and persistent',async()=>{
@@ -122,7 +140,9 @@ test('admin 可读取来源状态、切换日志并保存三元目录',async()=>
     // 保存目录必须实际影响公开报价（R02 验收：不止配置读回）
     const quotesApp=app;
     const q=quotesApp.quotes;
-    q.selector.configure(app.store.baseQuotes()); // 注入的聚合层未按目录建连：先注册候选来源（等价生产 start()），否则 ingest 会被 Selector 拒绝
+    // start:aigc. baseQuotes 已异步化（MySQL 改造），直接调用 app.store 需加 await
+    q.selector.configure(await app.store.baseQuotes()); // 注入的聚合层未按目录建连：先注册候选来源（等价生产 start()），否则 ingest 会被 Selector 拒绝
+    // end:aigc.
     q.ingestTest('rtj','黄金',{buy:100,sell:101,high:110,low:95,time:Date.now()});
     q.publish();
     const edited2=structuredClone((await call('/api/admin/catalog')).data);
@@ -142,6 +162,53 @@ test('admin 可读取来源状态、切换日志并保存三元目录',async()=>
     assert.ok(exported.categories.some((c)=>c.name==='黄金'));
     assert.ok(exported.baseQuotes.some((b)=>b.symbol==='probe-x'),'导出需反映目录新增的基础行情');
     // end:aigc.
+    // start:aigc. 数据源红绿灯（设计文档"数据源管理"）：runStatus 口径——全局停用源=disabled，
+    // 已登记但未 attach 的源=idle（注入聚合层时全部如此），并带 hasSecret 标志
+    const withRun=(await call('/api/admin/sources')).data.sources;
+    assert.equal(withRun.find((s)=>s.id==='yahoo').runStatus,'disabled','全局停用源必须显示 disabled');
+    assert.ok(withRun.every((s)=>typeof s.runStatus==='string'&&typeof s.lastSuccessAt!=='undefined'));
+    // iTick Token 后台配置：写入→hasSecret 翻转→清除；全程不回明文。
+    // F04（四查）：credentialSource 区分当前实际凭据来源（db/env/null）
+    const prevItickEnv=process.env.ITICK_TOKEN;delete process.env.ITICK_TOKEN;   // 排除环境兜底干扰断言
+    const secretPayload='test-itick-token-abc123';
+    assert.equal((await call('/api/admin/source-secret',{sourceId:'itick',secret:secretPayload})).status,200);
+    let afterSet=(await call('/api/admin/sources')).data.sources.find((s)=>s.id==='itick');
+    assert.equal(afterSet.hasSecret,true,'保存后密钥已配置标志必须翻转');
+    assert.equal(afterSet.credentialSource,'db','库中有密钥时凭据来源为后台');
+    assert.ok(!JSON.stringify(afterSet).includes(secretPayload),'任何接口都不得回显密钥明文');
+    assert.equal(await app.store.getSourceSecret('itick'),secretPayload,'密文可解密回原文（供适配器装配）');
+    assert.equal((await call('/api/admin/source-secret',{sourceId:'nope',secret:'x'})).status,400,'未登记数据源必须 400');
+    assert.equal((await call('/api/admin/source-secret',{sourceId:'itick',secret:'bad token'})).status,400,'含空白密钥必须 400');
+    assert.equal((await call('/api/admin/source-secret',{sourceId:'itick'})).status,400,'缺失 secret 字段必须 400（不得静默转清除）');
+    assert.equal((await call('/api/admin/source-secret',{sourceId:'itick',secret:123})).status,400,'非字符串 secret 必须 400');
+    assert.equal((await call('/api/admin/source-secret',{sourceId:'itick',secret:''})).status,200,'空串=清除密钥');
+    afterSet=(await call('/api/admin/sources')).data.sources.find((s)=>s.id==='itick');
+    assert.equal(afterSet.hasSecret,false,'清除后密钥已配置标志必须回落');
+    assert.equal(afterSet.credentialSource,null,'清除且无环境变量时凭据来源为空');
+    assert.equal(await app.store.getSourceSecret('itick'),null);
+    if(prevItickEnv!==undefined)process.env.ITICK_TOKEN=prevItickEnv;
+    // V5-03（五查）：登出（或改密）后的会话不得再写密钥——异步核验回归
+    await call('/api/admin/logout',{});
+    assert.equal((await call('/api/admin/source-secret',{sourceId:'itick',secret:'x'})).status,401,'登出后密钥写入必须 401');
+    // end:aigc.
   }finally{await app.close();rmSync(dir,{recursive:true,force:true});}
+});
+// end:aigc.
+
+// start:aigc.
+// R07（2026-10-28 三查）：rtj 订阅表必须同步单品种/映射停用——停用行不进订阅、
+// 无 code 不生成占位（堵 resolveCatalog 补码通路）、全停用时返回空数组（零连接）
+test('R07：buildRtjMap 过滤基础行情停用与映射停用，空订阅零连接',()=>{
+  const mk=(symbol,bEnabled,sEnabled,code)=>({symbol,enabled:bEnabled,sources:[{sourceId:'rtj',priority:1,kind:'plain',code,enabled:sEnabled}]});
+  // 正常行 + 映射停用行 + 基础行情停用行 + 无 rtj 映射行情 → 只有正常行进订阅
+  const map=buildRtjMap([mk('黄金',true,true,'JZJ_au'),mk('白银',true,false,'JZJ_ag'),mk('铂金',false,true,'JZJ_pt'),{symbol:'美元指数',enabled:true,sources:[{sourceId:'wscn',priority:1,code:'DXY.OTC',enabled:true}]}]);
+  assert.deepEqual(map,[{symbol:'黄金',code:'JZJ_au',kind:'plain'}]);
+  // 唯一 rtj 映射停用（全局源仍启用）→ 空订阅，调用方据此不 attach（零握手/订阅/重连）
+  assert.deepEqual(buildRtjMap([mk('黄金',true,false,'JZJ_au')]),[]);
+  // 唯一基础行情停用 → 空订阅
+  assert.deepEqual(buildRtjMap([mk('黄金',false,true,'JZJ_au')]),[]);
+  // code 缺失/占位：不生成 code:null 占位（R05 补码通路），__NONE__ 同样排除
+  assert.deepEqual(buildRtjMap([mk('港金',true,true,null)]),[]);
+  assert.deepEqual(buildRtjMap([mk('港金',true,true,'__NONE__')]),[]);
 });
 // end:aigc.

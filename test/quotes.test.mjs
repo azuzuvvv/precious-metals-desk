@@ -72,3 +72,80 @@ test('黄金快照带来源元数据且公式可加销售价差',()=>{
 });
 // end:aigc.
 // end:aigc.
+
+// start:aigc.
+// 数据源红绿灯聚合（设计文档"数据源管理"）：healthy/partial/disconnected/idle 与最近成功/最近错误
+const fakeAdapter=(id)=>({id,name:id,start:()=>()=>{},stop(){}});
+test('sourceStatus：按源聚合品种健康度、最近成功与最近错误',()=>{
+  const now=Date.now();
+  const q=new Quotes({baseQuotes:[
+    {symbol:'美元指数',sources:[{sourceId:'wscn',priority:1,enabled:true},{sourceId:'itick',priority:2,enabled:true}]},
+    {symbol:'美元兑港元',sources:[{sourceId:'wscn',priority:1,enabled:true}]},
+    {symbol:'黄金',sources:[{sourceId:'rtj',priority:1,enabled:true}]},
+  ]});
+  q.attach(fakeAdapter('wscn'));q.attach(fakeAdapter('itick'));q.attach(fakeAdapter('rtj'));q.attach(fakeAdapter('empty'));
+  // F01（四查）：分母从配置枚举——美元指数已配置 itick 但从未响应，必须计入分母（不能漏算成全绿）
+  q.ingestTest('wscn','美元指数',{buy:103.5,sell:103.55,time:now});
+  q.ingestTest('wscn','美元兑港元',{buy:7.8,sell:7.81,time:now-1000});
+  q.publish(now);
+  let st=q.sourceStatus().get('wscn');
+  assert.equal(st.status,'healthy');
+  assert.equal(st.healthy,2);assert.equal(st.total,2);
+  assert.equal(st.lastSuccessAt.getTime(),now);      // 取全部品种 tick 最大时间
+  st=q.sourceStatus().get('itick');
+  assert.equal(st.status,'disconnected','配置未响应的品种计入分母：0/1 连接失败而非 idle');
+  assert.equal(st.total,1);assert.equal(st.healthy,0);
+  assert.equal(st.lastSuccessAt,null);
+  // 真正零订阅（无任何启用映射的已挂载源）才是 idle
+  assert.equal(q.sourceStatus().get('empty').status,'idle');
+  assert.equal(q.sourceStatus().get('rtj').status,'disconnected','黄金配置 rtj 未响应 → 0/1，非 idle');
+  // itick 收到过数据后断线 → 红，最近错误可追溯且保留断线前最近成功
+  q.ingestTest('itick','美元指数',{buy:103.4,sell:103.45,time:now-500});
+  q.failTest('itick','美元指数',new Error('HTTP 401'));
+  q.publish(now);
+  st=q.sourceStatus().get('itick');
+  assert.equal(st.status,'disconnected');
+  assert.equal(st.lastError,'HTTP 401');
+  assert.equal(st.lastSuccessAt.getTime(),now-500);
+  // wscn 一品种断线 → 部分正常（黄灯）
+  q.failTest('wscn','美元兑港元',new Error('HTTP 500'));
+  q.publish(now);
+  st=q.sourceStatus().get('wscn');
+  assert.equal(st.status,'partial');
+  assert.equal(st.lastError,'HTTP 500');
+});
+
+// start:aigc.
+// 红绿灯按接口返回的数据流统计（2026-10-28 回退 V5-01，用户决策）：源站原生单边品种
+// （如 Pt99.95 只推单侧）是常态，按品类公式必需字段降级会让红绿灯常态黄灯、淹没真故障——
+// 选源层的单边降级（M01/partial 模式）已在前台与快照呈现，红绿灯只关心连接与数据流
+test('单边返回的品种不降级红绿灯（回退 V5-01 的决策固化）',()=>{
+  const now=Date.now();
+  const q=new Quotes({
+    baseQuotes:[{symbol:'X',sources:[{sourceId:'a',priority:1,enabled:true}]}],
+    categories:[{id:'c1',name:'C',visible:true,buyFormula:'【#X#回购价】',sellFormula:'【#X#销售价】',highFormula:'',lowFormula:'',decimals:2,rounding:'half-up'}],
+  });
+  q.attach(fakeAdapter('a'));
+  q.ingestTest('a','X',{buy:100,time:now});   // 只有买价：接口数据流正常，销售报价缺失由前台提示
+  q.publish(now);
+  assert.equal(q.selector.state('X',now).mode,'partial','选源层仍按 M01 单边降级');
+  const st=q.sourceStatus().get('a');
+  assert.equal(st.status,'healthy','接口正常返回单边数据时红绿灯保持绿灯');
+  assert.equal(st.healthy,1);assert.equal(st.total,1);
+});
+
+// V5-02（五查）：采样间隔内"失败→恢复"的短暂故障不得从错误历史中丢失——
+// 失败回调即记错误事件，恢复（entry.err 清空）后 lastError 仍保留，分钟落库可追溯
+test('V5-02：失败后恢复，最近错误事件仍保留',()=>{
+  const now=Date.now();
+  const q=new Quotes({baseQuotes:[{symbol:'X',sources:[{sourceId:'a',priority:1,enabled:true}]}]});
+  let handlers;   // 截获 attach 注入的回调，模拟真实适配器的失败/恢复路径
+  q.attach({id:'a',name:'a',start(h){handlers=h;return()=>{};},stop(){}});
+  handlers.onFailure('X',new Error('HTTP 500'));           // 短暂故障
+  q.ingestTest('a','X',{buy:1,sell:2,time:now});            // 下一分钟采样前已恢复（err 被清空）
+  q.publish(now);
+  const st=q.sourceStatus().get('a');
+  assert.equal(st.status,'healthy','恢复后连接状态是健康的');
+  assert.equal(st.lastError,'HTTP 500','短暂故障必须保留在最近错误中（供分钟落库）');
+});
+// end:aigc.

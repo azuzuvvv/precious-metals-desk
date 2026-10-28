@@ -73,5 +73,18 @@ test('validateCatalog T08：来源外键 / symbol 唯一 / 单行情内 sourceId
   assert.doesNotThrow(() => validateCatalog({ sources: SRCS, baseQuotes: [
     { symbol: 'X', name: 'X', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1 }, { sourceId: 'sina', priority: 2 }] }], categories: [] }));
 });
+
+// start:aigc.
+test('validateCatalog F04：拒绝首尾含空白的 symbol（PAD SPACE 与 JS 严格比较语义冲突）', () => {
+  // MySQL utf8mb4_bin 为 PAD SPACE：'黄金' 与 '黄金 ' 在唯一索引/WHERE 中等价，
+  // 但 JS 严格比较不等——若放行，UPDATE 命中旧行而来源映射按新串写入，读取时来源挂空。
+  assert.throws(() => validateCatalog({ sources: SRCS, baseQuotes: [
+    { symbol: '黄金 ', name: '黄金', decimals: 2 }], categories: [] }), /首尾空白/);
+  assert.throws(() => validateCatalog({ sources: SRCS, baseQuotes: [
+    { symbol: ' 黄金', name: '黄金', decimals: 2 }], categories: [] }), /首尾空白/);
+  // 正常值不受影响
+  assert.doesNotThrow(() => validateCatalog({ sources: SRCS, baseQuotes: BASE, categories: [] }));
+});
+// end:aigc.
 // end:aigc.
 // end:aigc.

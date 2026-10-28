@@ -11,4 +11,14 @@
 #basequotes .row-card{border-left:4px solid var(--gold);background:#faf7f1}
 #basequotes .row-card .row-header .row-name{color:var(--gold)}
 #basequotes .row-card.disabled{background:#fcf9f3;border-left-color:#c8a35a}
+/* start:aigc. 数据源红绿灯（设计文档"数据源管理"）：状态灯圆点 + 配色 */
+.dot{display:inline-block;min-width:64px;padding:2px 8px;border-radius:10px;font-size:12px;color:#fff;text-align:center}
+.dot::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.95);margin-right:5px;vertical-align:1px}
+.dot-green{background:#2e9e5b}
+.dot-yellow{background:#c98a2e}
+.dot-red{background:#c0392b}
+.dot-gray{background:#8a8a8a}
+.dot-idle{background:#b8b0a1;color:#5f5a4f}
+#source-rows td{white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+#source-rows td:last-child{white-space:normal}
 /* end:aigc. */

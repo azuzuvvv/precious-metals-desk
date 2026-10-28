@@ -9,12 +9,14 @@ function render(){if(!snapshot)return;const s=snapshot;
  document.title=s.brand.name+' | 贵金属行情';$('logo').alt=s.brand.name;
  const logo=s.brand.logo||'/assets/logo.png';if(logo.startsWith('/assets/')&&!logo.includes('..'))$('logo').src=logo;
  $('subtitle').textContent=s.brand.subtitle;$('notice').textContent=s.brand.notice;$('brand-footer').textContent=s.brand.footer;$('phone').textContent=s.brand.phone?'联系方式：'+s.brand.phone:'';
- $('server-time').textContent=formatTime(s.serverTime);$('shop').textContent='店铺'+(s.status.shopOpen?'开盘':'停盘');
+// start:aigc. 右上角营业状态文案：按要求由"店铺开盘/店铺停盘"改为"开盘/闭盘"
+ $('server-time').textContent=formatTime(s.serverTime);$('shop').textContent=s.status.shopOpen?'开盘':'闭盘';
+ // end:aigc.
  // start:aigc. 与原站一致的视觉（不置灰），但保留停更/单边可见性（M02）：
- // 行内轻量标签（收盘/单边/停更）+ 顶部中性计数，半截/过期报价必须可辨识
- $('connection').className='connection'+(failed||!s.status.connected?' warning':'');
- const staleN=s.rows.filter(r=>r.stale).length;
- $('connection').textContent=(failed?'网络中断 · 以下为最后收到的报价，已过期':s.status.connected?'行情源已连接':'行情源连接中断')+' · 源状态：'+s.status.sourceStatus+' · 最近行情消息：'+formatTime(s.status.lastMessageAt)+(staleN&&!failed?' · '+staleN+' 项行情停更/单边':'');
+// 行内轻量标签（收盘/单边/停更），半截/过期报价必须可辨识
+// 2026-10-28 按需求移除顶部状态行（"行情源已连接 · 源状态：… · N 项行情停更/单边"整行不再展示），
+// 连接状态异常仍可通过行内标签与"缺少数据"按钮辨识
+ $('connection').hidden=true;
  // end:aigc.
  const fragment=document.createDocumentFragment();for(const r of s.rows){if(hidden.has(r.id))continue;const tr=el('tr',undefined,failed?'stale':'');const name=el('td',undefined,'product');name.append(el('span',r.name));
  // start:aigc. 行内轻量标签：stale 且有原因时显示精简词（不置灰、不弹窗），移动端可见

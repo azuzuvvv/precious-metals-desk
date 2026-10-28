@@ -14,9 +14,41 @@ function input(labelText,value,onInput,{type='text',cls='',options=null,dirtyFn=
 function renderBrand(){const fields=$('brand-fields');fields.replaceChildren();for(const [key,title]of [['name','品牌名称'],['subtitle','副标题'],['notice','滚动公告'],['footer','地址 / 页脚说明'],['phone','联系电话']]){const label=input(title,draft.brand[key],v=>draft.brand[key]=v);if(key==='notice'||key==='footer')label.className='wide';fields.append(label);}$('open-mode').value=draft.openMode;$('open-mode').onchange=()=>{draft.openMode=$('open-mode').value;changed();};$('schedule-fields').replaceChildren();['周日','周一','周二','周三','周四','周五','周六'].forEach((day,i)=>$('schedule-fields').append(input(day,draft.schedule[i],v=>draft.schedule[i]=v)));}
 // start:aigc.
 // 行情目录页签：加载/渲染三元目录与切换日志，保存走版本化乐观锁。
-async function loadCatalog(){const data=await api('catalog');catalogDraft={baseQuotes:data.baseQuotes,sources:data.sources,categories:data.categories};catalogSources=data.sources;catalogVersion=data.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';renderCatalogSources();renderCatalogBase();renderCatalogRows();}
+async function loadCatalog(){const data=await api('catalog');catalogDraft={baseQuotes:data.baseQuotes,sources:data.sources,categories:data.categories};catalogSources=data.sources;catalogVersion=data.version;catalogDirty=false;$('catalog-dirty').textContent='目录已保存';$('catalog-dirty').className='';renderCatalogBase();renderCatalogRows();}
 function catalogChanged(){catalogDirty=true;$('catalog-dirty').textContent='目录有未保存修改';$('catalog-dirty').className='unsaved';}
-function renderCatalogSources(){$('catalog-sources').replaceChildren(...catalogSources.map(s=>{const box=el('div');box.append(el('strong',s.name+' '),el('span',(s.enabled?'启用':'停用')+(s.hasSecret?' · 密钥已配置':''),s.enabled?'available':'missing'));return box;}));}
+// start:aigc.
+// 数据源红绿灯渲染（设计文档"数据源管理"）：状态灯/品种健康数/最近成功/最近错误/密钥入口。
+// 数据来自 GET /api/admin/sources（内存实时聚合优先，库值兜底），与目录草稿独立加载
+const RUN_STATUS={healthy:['正常','dot dot-green'],partial:['部分正常','dot dot-yellow'],stale:['数据过期','dot dot-yellow'],disconnected:['连接失败','dot dot-red'],idle:['无订阅','dot dot-idle'],disabled:['已停用','dot dot-gray']};
+let sourceRows=[],secretTarget=null;
+async function loadSources(){const data=await api('sources');sourceRows=data.sources;renderSourceRows();}
+function renderSourceRows(){
+  const frag=document.createDocumentFragment();
+  for(const s of sourceRows){
+    const tr=el('tr');
+    const [label,cls]=RUN_STATUS[s.runStatus]??RUN_STATUS.idle;
+    // F04：密钥列区分"当前实际凭据来源"——后台已配置 / 环境变量兜底 / 未配置
+    const credLabel=s.credentialSource==='db'?'后台已配置':s.credentialSource==='env'?'环境变量兜底':(s.hasSecret?'已配置':'未配置');
+    const credCls=s.credentialSource||s.hasSecret?'available':'missing';
+    tr.append(el('td',label,cls),el('td',s.name),
+      el('td',(s.runStatus==='disabled'||s.runStatus==='idle')?'—':`${s.runHealthy}/${s.runTotal}`),
+      el('td',s.lastSuccessAt?new Date(s.lastSuccessAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—'),
+      el('td',s.lastError||s.note||'—'),
+      el('td',credLabel,credCls));
+    const tools=el('td');const cfg=el('button',s.hasSecret?'更新密钥':'配置密钥');
+    cfg.onclick=()=>openSecretDialog(s);tools.append(cfg);tr.append(tools);frag.append(tr);
+  }
+  $('source-rows').replaceChildren(frag);
+}
+// 密钥配置对话框（iTick Token）：密文落库不回显；留空保存=清除；改动重启后生效
+function openSecretDialog(s){secretTarget=s;$('secret-title').textContent=`配置 ${s.name} 密钥`;$('secret-input').value='';$('secret-dialog').showModal();$('secret-input').focus();}
+$('close-secret').onclick=()=>$('secret-dialog').close();
+$('secret-form').onsubmit=event=>{event.preventDefault();if(!secretTarget)return;const value=$('secret-input').value.trim();task($('secret-save'),async()=>{await api('source-secret',{sourceId:secretTarget.id,secret:value});$('secret-dialog').close();await loadSources().catch(()=>{});message(value?'密钥已保存，重启服务后生效。':'密钥已清除，重启服务后生效。');});};
+$('secret-clear').onclick=()=>{if(!secretTarget)return;
+  // F04：清除只删后台密钥；服务器若配了 ITICK_TOKEN 环境变量，重启后将回落使用——文案必须说清
+  if(!confirm(`确认清除 ${secretTarget.name} 的后台密钥？仅清除后台保存的密钥；若服务器还配置了 ITICK_TOKEN 环境变量，重启后将回落使用环境变量。`))return;
+  task($('secret-clear'),async()=>{await api('source-secret',{sourceId:secretTarget.id,secret:''});$('secret-dialog').close();await loadSources().catch(()=>{});message('后台密钥已清除，重启服务后生效。');});};
+// end:aigc.
 // start:aigc. 基础行情编辑支持增删与来源映射增删（R10）
 function renderCatalogBase(){const frag=document.createDocumentFragment();for(const b of catalogDraft.baseQuotes){const card=el('article',undefined,'row-card'+(!b.enabled?' disabled':''));const head=el('div',undefined,'row-header');head.append(el('strong',b.symbol),el('span',b.unit||'—','row-id'));const en=el('label',undefined,'inline');const ck=el('input');ck.type='checkbox';ck.checked=b.enabled;ck.setAttribute('aria-label',`${b.symbol} 启用`);ck.onchange=()=>{b.enabled=ck.checked;card.classList.toggle('disabled',!ck.checked);catalogChanged();};en.append(ck,el('span','启用'));const tools=el('div',undefined,'row-tools');const addSrc=el('button','＋ 来源');addSrc.setAttribute('aria-label',`${b.symbol} 新增来源映射`);addSrc.onclick=()=>{b.sources.push({sourceId:'sina',priority:2,kind:'sina',code:'',enabled:true});catalogChanged();renderCatalogBase();};const remove=el('button','删除');remove.setAttribute('aria-label',`${b.symbol} 删除基础行情`);remove.onclick=()=>{if(confirm(`删除基础行情“${b.symbol}”？引用它的品类公式将成为软引用（运行时空值），保存后生效。`)){catalogDraft.baseQuotes=catalogDraft.baseQuotes.filter((x)=>x!==b);catalogChanged();renderCatalogBase();}};tools.append(addSrc,remove);head.append(en,tools);card.append(head);const fields=el('div',undefined,'row-fields');fields.append(input('代码键 symbol',b.symbol,v=>b.symbol=v.trim(),{dirtyFn:catalogChanged}),input('名称',b.name,v=>b.name=v,{dirtyFn:catalogChanged}),input('单位',b.unit,v=>b.unit=v,{dirtyFn:catalogChanged}),input('小数位',b.decimals,v=>b.decimals=Number(v),{options:Array.from({length:7},(_,i)=>[i,String(i)]),dirtyFn:catalogChanged}));for(const s of b.sources){const src=el('div',undefined,'row-fields');src.append(input(`来源ID`,s.sourceId,v=>s.sourceId=v.trim(),{dirtyFn:catalogChanged}),input('优先级',s.priority,v=>s.priority=Number(v),{type:'number',dirtyFn:catalogChanged}),input('类型',s.kind,v=>s.kind=v,{options:[['plain','普通'],['split','拆分买卖'],['sina','新浪'],['yahoo','Yahoo'],['frankfurter','汇率'],],dirtyFn:catalogChanged}),input('代码',s.code??'',v=>s.code=v||null,{dirtyFn:catalogChanged}),input('过期阈值(秒)',s.staleMs?s.staleMs/1000:'',v=>s.staleMs=v===''||Number(v)<=0?null:Number(v)*1000,{type:'number',dirtyFn:catalogChanged}));const se=el('label',undefined,'inline');const sc=el('input');sc.type='checkbox';sc.checked=s.enabled!==false;sc.onchange=()=>{s.enabled=sc.checked;catalogChanged();};se.append(sc,el('span','启用'));const rm=el('button','删除来源');rm.onclick=()=>{b.sources=b.sources.filter((x)=>x!==s);catalogChanged();renderCatalogBase();};src.append(rm,se);card.append(src);}card.append(fields);frag.append(card);}$('catalog-base').replaceChildren(frag);}
 // end:aigc.
@@ -78,8 +110,8 @@ $('close-preview').onclick=()=>$('preview-dialog').close();
 async function history(){const data=await api('audit');$('history-list').replaceChildren(...data.entries.map(e=>{const entry=el('div',undefined,'history-entry');entry.append(el('strong','v'+e.version),el('time',new Date(e.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})),el('span',e.summary));return entry;}));if(!data.entries.length)$('history-list').append(el('p','尚无修改记录。'));}
 $('refresh-history').onclick=()=>task($('refresh-history'),history);
 // start:aigc.
-// 刷新前确认：目录有未保存修改时避免静默覆盖
-$('refresh-switch-logs').onclick=()=>task($('refresh-switch-logs'),async()=>{if(catalogDirty&&!confirm('行情目录有未保存修改，刷新将丢弃，继续？'))return;await loadCatalog();await loadSwitchLogs();});
+// 刷新前确认：目录有未保存修改时避免静默覆盖；红绿灯与切换日志一并重载
+$('refresh-switch-logs').onclick=()=>task($('refresh-switch-logs'),async()=>{if(catalogDirty&&!confirm('行情目录有未保存修改，刷新将丢弃，继续？'))return;await loadCatalog();await Promise.all([loadSources(),loadSwitchLogs()]);});
 // start:aigc. F02：目录保存提取为独立函数——顶部保存"仅目录脏"分支直接复用
 //（不能调 $('catalog-save').onclick()：task() 的 busy 守卫在外层已置位时会静默吞掉内层执行）
 async function saveCatalog(){if(!catalogDraft)return;const result=await api('catalog',{...catalogDraft,expectedVersion:catalogVersion});catalogVersion=result.version;// 同窗口目录保存后同步品牌表单版本（F04）
@@ -108,9 +140,9 @@ if(catalogDirty&&CATALOG_EDIT_TABS.includes(catalogTab())&&!CATALOG_EDIT_TABS.in
 // end:aigc.
 document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b===button)));document.querySelectorAll('.tab-panel').forEach(p=>p.hidden=p.id!==button.dataset.tab);if(button.dataset.tab==='history')history().catch(e=>message(e.message,true));
 // start:aigc.
-// 业务品类/基础行情页签进入时加载目录草稿（未修改时刷新）；数据源页签额外拉切换日志
+// 业务品类/基础行情页签进入时加载目录草稿（未修改时刷新）；数据源页签额外拉红绿灯与切换日志
 if(button.dataset.tab==='categories'||button.dataset.tab==='basequotes'){if(!catalogDirty)loadCatalog().catch(e=>message(e.message,true));}
-if(button.dataset.tab==='sourcelog'){if(!catalogDirty)loadCatalog().catch(e=>message(e.message,true));loadSwitchLogs().catch(e=>message(e.message,true));}
+if(button.dataset.tab==='sourcelog'){if(!catalogDirty)loadCatalog().catch(e=>message(e.message,true));loadSources().catch(e=>message(e.message,true));loadSwitchLogs().catch(e=>message(e.message,true));}
 // end:aigc.
 });
 // start:aigc.

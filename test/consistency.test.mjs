@@ -1,16 +1,15 @@
 // start:aigc.
+// MySQL 改造适配：new Store → createTestStore（独立测试库，见 helpers.mjs），
+// categories/close 异步化加 await，测试结束 destroyTestStore；断言语义与测试意图保持不变
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
-import {Store} from '../src/store.mjs';
+import {createTestStore,destroyTestStore} from './helpers.mjs';
 
-test('迁移后品类与升级前口径一致', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'lcjy-migrate-'));
+test('迁移后品类与升级前口径一致', async () => {
+  let store;
   try {
-    const store = new Store(dir);
-    const categories = store.categories();
+    store = await createTestStore();
+    const categories = await store.categories();
     // 直连透传品类公式保持一致
     const gold = categories.find((c) => c.name === '黄金');
     assert.equal(gold.buyFormula, '【#黄金#回购价】');
@@ -24,7 +23,6 @@ test('迁移后品类与升级前口径一致', () => {
     for (const gap of ['公斤条','公斤铂','公斤钯','公斤银','沪金次主力','沪银次主力','美铑金']) {
       assert.equal(categories.filter((c) => c.name === gap).length, 0, `${gap} 不应迁入`);
     }
-    store.close();
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { await destroyTestStore(store); }
 });
 // end:aigc.

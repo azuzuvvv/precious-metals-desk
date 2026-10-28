@@ -2,7 +2,7 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>龙城金艺 | 贵金属行情</title><link rel="icon" href="/assets/logo.png"><link rel="stylesheet" href="/quote.css"><link rel="stylesheet" href="/quote-details.css"><script src="/quote.js" defer></script></head>
 <body><header class="brand"><img id="logo" src="/assets/logo.png" alt="龙城金艺"><span id="subtitle">专注贵金属原料市场</span></header>
 <div class="status"><button id="choose">⚙ 自选</button><span id="server-time">--</span> | <span id="shop">等待行情</span></div>
-<div id="connection" class="connection" role="status">正在连接行情服务…</div>
+<!-- start:aigc. 2026-10-28 按需求隐藏顶部行情源状态行（初始即隐藏，避免加载闪现） --><div id="connection" class="connection" role="status" hidden>正在连接行情服务…</div><!-- end:aigc. -->
 <main><table class="quotes"><colgroup><col class="name-col"><col><col><col></colgroup><thead><tr><th>商 品</th><th>回 购</th><th>销 售</th><th>高 / 低</th></tr></thead><tbody id="prices"></tbody></table><p id="empty" hidden>未选择显示品种，请打开“自选”。</p>
 <div class="memo"><div>声明 ：<span class="red">以上行情仅供参考!</span></div><div id="brand-footer"></div><div id="phone"></div></div></main>
 <footer><nav aria-label="行情导航"><a href="/" aria-current="page">行情</a><a href="https://www.jin10.com/" target="_blank" rel="noopener noreferrer">资讯 ↗</a><a href="https://rili.jin10.com/" target="_blank" rel="noopener noreferrer">财经 ↗</a></nav><div class="notice"><span id="notice"></span></div><div class="bottom">龙城金艺 · 贵金属行情</div></footer>

@@ -3,6 +3,7 @@
 // 字段映射集中在一个表，新增品种只需加表项。fx 外汇字段按 [1]=买 [2]=卖 [4]=高 [5]=低 假设，
 // 港汇字段由 scripts/verify-live.mjs 探针在实盘校验。
 import { normalizeTick } from './adapter.mjs';
+import { createPollingAdapter } from './polling-adapter.mjs';
 
 const SINA_QMAP = {
   // start:aigc. T01/T02：报文时间走 timeFields（日期位+时间位）。实盘探针（2026-10-23 收盘时段）确认：
@@ -32,13 +33,15 @@ export function buildSinaQuotes(baseQuotes) {
   // start:aigc.
   // 同一 code 可被多个基础行情共用（如 hf_XPT 同时服务美铂金与伦敦铂），
   // 值必须是 symbol 数组——单对象会被后写覆盖，导致共用品种备援静默失效。
-  // end:aigc.
+  // F01（2026-10-28 审查）：基础行情或映射停用的不进订阅（零请求），与 wscn/tencent/itick 统一
   const out = {};
   for (const bq of baseQuotes) {
+    if (bq.enabled === false) continue;
     const s = (bq.sources || []).find((x) => x.sourceId === 'sina');
-    if (s?.code && s.code !== '__NONE__') (out[s.code] ??= []).push({ symbol: bq.symbol });
+    if (s?.enabled !== false && s?.code && s.code !== '__NONE__') (out[s.code] ??= []).push({ symbol: bq.symbol });
   }
   return out;
+  // end:aigc.
 }
 
 export function parseSinaText(text, quotes, now = Date.now()) {
@@ -82,21 +85,24 @@ export function parseSinaText(text, quotes, now = Date.now()) {
   return ticks;
 }
 
-export function attachSina({ baseQuotes, onQuote, intervalMs = 15000 }) {
-  const quotes = buildSinaQuotes(baseQuotes);
-  const codes = Object.keys(quotes);
-  if (!codes.length) return () => {};   // 无新浪品种可拉取时不开轮询
-  const url = `https://hq.sinajs.cn/list=${codes.join(',')}`;
-  async function poll() {
-    try {
-      const r = await fetch(url, { headers: { Referer: 'https://finance.sina.com.cn' }, signal: AbortSignal.timeout(8000) });
-      // 新浪返回 GBK 编码，数字段均为 ASCII，latin1 解码即可
-      const text = Buffer.from(await r.arrayBuffer()).toString('latin1');
-      for (const t of parseSinaText(text, quotes)) onQuote(t);
-    } catch { /* 拉取失败保留旧值，由超时机制标记 stale */ }
-  }
-  void poll();
-  const timer = setInterval(poll, intervalMs); timer.unref?.();
-  return () => clearInterval(timer);
+// start:aigc.
+// 协议组装（2026-10-28 重构）：调度/失败通知/停止取消统一交给 polling-adapter，只留协议差异。
+// 新浪 hq 在阿里云机房 IP 被 403（线上由迁移禁用映射），本地开发仍可用
+export function createSinaAdapter(baseQuotes, { fetchImpl = fetch, pollMs = null, timeoutMs = null } = {}) {
+  return createPollingAdapter({
+    id: 'sina', name: '新浪', baseQuotes, fetchImpl, pollMs, reqTimeoutMs: timeoutMs,
+    buildQuotes: buildSinaQuotes,
+    // 新浪反爬：仅带 Referer 时，机房 IP（阿里云等）会直接返回 403，必须补浏览器 UA 才放行
+    requestsFor: (codes) => [{
+      url: `https://hq.sinajs.cn/list=${codes.join(',')}`,
+      headers: {
+        Referer: 'https://finance.sina.com.cn/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    }],
+    // 文本协议无业务码（GBK 报文数字段均为 ASCII，latin1 解码即可），解析层已具备完整守卫
+    parseResponse: (text, quotes) => parseSinaText(text, quotes),
+  });
 }
+// end:aigc.
 // end:aigc.

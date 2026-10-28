@@ -4,7 +4,9 @@
 
 ## 本地启动
 
-需要 Node.js 24（使用其内置 SQLite）。在项目目录运行：
+<!-- start:aigc. -->
+需要 Node.js 22 及以上，并准备一个 MySQL 5.7 数据库（详见 `docs/MySQL数据库改造方案.md`）。连接参数通过环境变量提供，参考 `.env.example` 设置 DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD 后运行：
+<!-- end:aigc. -->
 
 ```powershell
 npm ci
@@ -32,15 +34,17 @@ npm start
 
 在已验证的融通金品种目录里，尚未找到港金、美元指数、公斤条及部分原系统专有数据。因此保留原行和原公式，但缺失项显示 `--` 并给出原因，不用其他来源冒充。原盘“铑金”的销售公式实际含黄金组合减公斤条价格，照原式保留，需要公斤条数据才能计算。这些数据覆盖差异意味着当前不能声称所有品种数值都与旧盘完全一致。
 
+<!-- start:aigc. -->
 ## 数据与备份
 
-运行数据在 `data/quotes.sqlite`（含密码哈希、配置和完整版本历史），不应提交到版本库。不要在服务运行时仅复制主数据库而忽略 WAL。使用在线一致性备份：
+运行数据存于 MySQL（默认库名 `gold_quote`，含密码哈希、配置和完整版本历史）；`data/` 目录下仅有 `secret.key`（来源密钥主密钥）与 `setup-token.txt`，两者都不应提交到版本库。一致性备份（需服务器装有 mysqldump 客户端）：
 
 ```powershell
 node scripts/backup.mjs
 ```
 
-备份存入 `data/backups/`，请另外复制到安全位置。后台“导出配置”只备份当前配置，不包含账号。恢复完整数据库时先停止程序，将备份恢复为 `data/quotes.sqlite`，在专门备份原运行目录后处理原 WAL/SHM 文件，再重启；不要混用旧数据库附属文件。
+导出的 SQL 存入 `data/backups/`，请连同 `data/secret.key` 一起另外复制到安全位置（缺少该文件将无法解密来源密钥）。后台"导出配置"只备份当前配置，不包含账号。恢复：先停止程序，将 SQL 导入目标库并放回 secret.key，再重启。
+<!-- end:aigc. -->
 
 ## 手机访问和部署
 
@@ -63,11 +67,17 @@ npm run probe
 
 测试覆盖十进制计算、公式攻击输入、缺失行情、报价过期、独立后台权限、CSRF、版本冲突、持久化与审计。probe 只读取一组实时黄金价格后退出。实时价格随时间变化，不应拿不同时间截图直接判断价差错误。
 
+<!-- start:aigc. -->
+测试与集成测试需要真实 MySQL：设置 `DB_TEST_HOST/DB_TEST_PORT/DB_TEST_USER/DB_TEST_PASSWORD`（本地开发用），测试自动创建并清理 `lcjy_test_*` 隔离库，不会触碰业务库。
+<!-- end:aigc. -->
+
 ## 项目结构
 
 - `src/feed.mjs` / `quote.proto`：独立源行情协议。
 - `src/formula.mjs` / `config.mjs`：计算、配置校验与输出。
-- `src/store.mjs` / `server.mjs`：SQLite、权限、只读报价和后台API。
+<!-- start:aigc. -->
+- `src/store.mjs` / `server.mjs`：MySQL 存储（mysql2）、权限、只读报价和后台API。
+<!-- end:aigc. -->
 - `src/defaults.json`：读取原公开配置形成的初始值。
 - `public/`：报价页和独立后台。
 - `test/`：自动化验证。

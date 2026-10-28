@@ -14,7 +14,13 @@ export const FIELD_LABELS={buy:'回购价',sell:'销售价',high:'最高价',low
 // end:aigc.
 export const SOURCES = [
   { id: 'rtj', name: '融通金', type: 'websocket', enabled: true },
+  // start:aigc. 2026-10-28 换源：新浪 hq.sinajs.cn 对阿里云机房 IP 整段 403（换域名/EIP 无效），
+  // 引入三个阿里云实测可通的新源；sina 保留（本地开发可用），线上由迁移禁用其映射行
   { id: 'sina', name: '新浪', type: 'http', enabled: true },
+  { id: 'wscn', name: '华尔街见闻', type: 'http', enabled: true },
+  { id: 'tencent', name: '腾讯', type: 'http', enabled: true },
+  { id: 'itick', name: 'iTick', type: 'http', enabled: true },
+  // end:aigc.
   { id: 'yahoo', name: 'Yahoo Finance', type: 'http', enabled: false },
   { id: 'frankfurter', name: 'Frankfurter', type: 'http', enabled: false },
 ];
@@ -34,14 +40,14 @@ export const BASE_QUOTES = [
   { symbol: '铂金9995', name: '铂金9995', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Pt99.95' }] },
   { symbol: '美黄金', name: '美黄金', unit: '美元/盎司', decimals: 1, sources: [
     { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'GLNC' },
-    // start:aigc. R03 新浪备援（实测时延 ~0s，20s 时效红线内保留）
-    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_GC', staleMs: 20000 },
+    // start:aigc. 2026-10-28 备援换源：新浪→腾讯 hf_GC（字段同构、日高日低与新浪精确一致，实测时延 10~30s）
+    { sourceId: 'tencent', priority: 2, kind: 'tencent', code: 'hf_GC', staleMs: 20000 },
     // end:aigc.
   ] },
   { symbol: '美白银', name: '美白银', unit: '美元/盎司', decimals: 3, sources: [
     { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'SLNC' },
-    // start:aigc. R03 新浪备援（实测时延 ~0s，20s 时效红线内保留）
-    { sourceId: 'sina', priority: 2, kind: 'sina', code: 'hf_SI', staleMs: 20000 },
+    // start:aigc. 2026-10-28 备援换源：新浪→腾讯 hf_SI
+    { sourceId: 'tencent', priority: 2, kind: 'tencent', code: 'hf_SI', staleMs: 20000 },
     // end:aigc.
   ] },
   { symbol: '美铂金', name: '美铂金', unit: '美元/盎司', decimals: 1, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'PLNC' }] },
@@ -51,12 +57,18 @@ export const BASE_QUOTES = [
   { symbol: '伦敦铂', name: '伦敦铂', unit: '美元/盎司', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XAP' }] },
   { symbol: '伦敦钯', name: '伦敦钯', unit: '美元/盎司', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'XPD' }] },
   { symbol: '美元指数', name: '美元指数', unit: '点', decimals: 2, sources: [
-    { sourceId: 'sina', priority: 1, kind: 'sina', code: 'DINIW' },
-    { sourceId: 'yahoo', priority: 2, kind: 'yahoo' },
+    // start:aigc. 2026-10-28 换源：新浪 DINIW 机房 403 → 见闻 DXY.OTC（口径与新浪同源，
+    // 日高日低精确一致）为主源；iTick DXY 为最终备援（免费版 5 次/分钟限频，口径存在 ~0.3 观测偏差）
+    { sourceId: 'wscn', priority: 1, kind: 'wscn', code: 'DXY.OTC' },
+    { sourceId: 'itick', priority: 2, kind: 'itick', code: 'DXY' },
+    // end:aigc.
   ] },
   { symbol: '美元兑离岸', name: '美元兑离岸人民币', unit: '', decimals: 4, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'USDCNH' }] },
   { symbol: '美元兑港元', name: '美元兑港元', unit: '', decimals: 4, sources: [
-    { sourceId: 'sina', priority: 1, kind: 'sina', code: 'fx_susdhkd' },
+    // start:aigc. 2026-10-28 换源：新浪 fx_susdhkd 机房 403 → 见闻 USDHKD.OTC（实时秒级，
+    // 与新浪值基本一致），港金公式（伦敦金×港汇×37.429/31.1034768×0.99）由此复活
+    { sourceId: 'wscn', priority: 1, kind: 'wscn', code: 'USDHKD.OTC' },
+    // end:aigc.
     { sourceId: 'frankfurter', priority: 2, kind: 'frankfurter' },
   ] },
   { symbol: '沪金主力', name: '沪金主力', unit: '元/克', decimals: 2, sources: [{ sourceId: 'sina', priority: 1, kind: 'sina', code: 'nf_AU0' }] },

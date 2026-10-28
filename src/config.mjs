@@ -148,6 +148,10 @@ export function validateCatalog({ sources = [], baseQuotes = [], categories = []
   const seenSymbols = new Set();
   for (const b of baseQuotes) {
     if (!b || typeof b.symbol !== 'string' || !b.symbol.trim()) throw new Error('基础行情键无效');
+    // start:aigc. F04 修复：MySQL utf8mb4_bin 为 PAD SPACE 比较，'黄金' 与 '黄金 ' 在唯一索引和 WHERE 中等价，
+    // 但 JS 严格比较不等——UPDATE 会命中旧行而来源映射按新串写入，读取时挂不上来源。输入边界直接拒绝首尾空白。
+    if (b.symbol !== b.symbol.trim()) throw new Error('基础行情键不能包含首尾空白');
+    // end:aigc.
     if (seenSymbols.has(b.symbol)) throw new Error(`基础行情 ${b.symbol} 重复`); seenSymbols.add(b.symbol);
     // end:aigc.
     // 与品类对称的结构校验，防止未知 symbol/非法精度透传到 UPDATE 静默丢失
