@@ -30,5 +30,82 @@ function render(){if(!snapshot)return;const s=snapshot;
 }
 function choices(){const frag=document.createDocumentFragment();for(const r of snapshot?.rows||[]){const label=el('label'),input=el('input');input.type='checkbox';input.checked=!hidden.has(r.id);input.addEventListener('change',()=>{input.checked?hidden.delete(r.id):hidden.add(r.id);persist();});label.append(input,el('span',r.name));frag.append(label);}$('choices').replaceChildren(frag);}
 $('choose').onclick=()=>{choices();$('selection').showModal();};$('all').onclick=()=>{hidden.clear();persist();choices();};$('none').onclick=()=>{hidden=new Set((snapshot?.rows||[]).map(r=>r.id));persist();choices();};
-async function poll(){try{const response=await fetch('/api/quotes',{cache:'no-store',signal:AbortSignal.timeout(6000)});if(!response.ok)throw Error();snapshot=await response.json();failed=false;render();}catch{failed=true;if(snapshot)render();else{$('connection').textContent='无法连接行情服务，暂无报价。正在重试…';$('connection').className='connection warning';}}finally{setTimeout(poll,2000);}}
-window.addEventListener('offline',()=>{failed=true;render();});poll();
+// start:aigc.
+// 会话与轮询（方案 §6/§15.2.2/§17.2）：基础 2 秒 ±10% 零均值抖动，上一请求完成后再调度（不重叠）；
+// 401 只重建一次会话再重试；429 遵守 Retry-After（最早重试时间，随机化只额外延后）；
+// 网络失败按 2/4/8/16/30 秒退避；恢复事件（online/visibilitychange）只触发去重后的恢复检查。
+// AP-01 修复：统一在请求结束后释放 polling 并调度下一轮，成功/401/429/异常后都继续，页面不冻结。
+// AP-02 修复：会话初始化错误保留 Retry-After；最早重试时间统一约束恢复事件，不提前打断 429 等待。
+let backoff=0,pollTimer=null,polling=false,lastOkAt=0,rebuildPromise=null,earliestRetryAt=0;
+const jitterDelay=()=>2000+Math.round((Math.random()-0.5)*400); // 均值 2000ms（±10%），消解重启后的同步轮询波
+function schedulePoll(ms){pollTimer=setTimeout(runPoll,ms);}
+// 会话重建任务全页唯一（§6：多个失败不能同时触发大量初始化）；错误携带服务器最早重试时间（AP-02）
+function ensureSession(){
+  if(!rebuildPromise)rebuildPromise=fetch('/api/viewer/session',{method:'POST',headers:{'content-type':'application/json'},body:'{}',signal:AbortSignal.timeout(6000)})
+    .then(async(response)=>{
+      if(!response.ok){
+        const retryAfterSec=Number(response.headers.get('retry-after'))||0;
+        const err=Error('session:'+response.status);
+        if(retryAfterSec>0)err.retryAfterMs=retryAfterSec*1000;
+        throw err;
+      }
+    })
+    .finally(()=>{rebuildPromise=null;});
+  return rebuildPromise;
+}
+async function fetchQuotes(){ // 401：重建会话后重试一次，不无限循环、不刷新整页
+  const response=await fetch('/api/quotes',{cache:'no-store',signal:AbortSignal.timeout(6000)});
+  if(response.status===401){await ensureSession();return fetch('/api/quotes',{cache:'no-store',signal:AbortSignal.timeout(6000)});}
+  return response;
+}
+// 从错误里提取服务器要求的最早重试间隔，无则用通用指数退避（AP-02）
+function delayFromError(err){
+  if(err&&err.retryAfterMs)return err.retryAfterMs+Math.round(Math.random()*500);
+  return [2000,4000,8000,16000,30000][Math.min(backoff++,4)];
+}
+async function runPoll(){
+  if(polling)return;polling=true;clearTimeout(pollTimer);
+  let nextMs;
+  try{
+    const response=await fetchQuotes();
+    if(response.status===429){ // 服务端已拒绝：保留旧报价并显示访问暂受限制（failed 置灰即停更标识）
+      failed=true;render();
+      nextMs=Math.max(1,Number(response.headers.get('retry-after'))||2)*1000+Math.round(Math.random()*500);
+    }else if(!response.ok){
+      throw Error('http:'+response.status);
+    }else{
+      snapshot=await response.json();failed=false;backoff=0;lastOkAt=Date.now();render();
+      nextMs=jitterDelay();
+    }
+  }catch(err){
+    failed=true;if(snapshot)render();else{$('connection').textContent='无法连接行情服务，暂无报价。正在重试…';$('connection').className='connection warning';}
+    nextMs=delayFromError(err);
+  }
+  earliestRetryAt=Date.now()+nextMs; // 记录最早重试时间，供恢复事件判定（AP-02）
+  polling=false; // AP-01：统一释放请求标记，保证下一轮可继续
+  schedulePoll(nextMs);
+}
+// 恢复检查去重（§6 + AP-02）：仅空闲、页面可见、在线、已过最早重试时间且距上次成功超过 5 秒时提前触发一次
+function nudge(){
+  if(polling||document.hidden||!navigator.onLine)return;
+  if(Date.now()<earliestRetryAt)return; // 尊重服务器最早重试时间，不提前打断 429/初始化限流等待
+  if(Date.now()-lastOkAt>5000)runPoll();
+}
+window.addEventListener('online',nudge);
+document.addEventListener('visibilitychange',nudge);
+// end:aigc.
+window.addEventListener('offline',()=>{failed=true;render();});
+// start:aigc. AP-02 残留修复：首次会话创建失败（如 429 限流）不得吞错即轮询，
+// 须先设最早重试时间并退避，期限前不发起行情/二次创建请求，期限后才 runPoll。
+function boot(){
+  ensureSession().then(()=>runPoll()).catch((err)=>{
+    failed=true;
+    if(snapshot)render();
+    else{$('connection').textContent='无法连接行情服务，暂无报价。正在重试…';$('connection').className='connection warning';}
+    const nextMs=delayFromError(err); // 携带 Retry-After 时优先遵守，否则按指数退避
+    earliestRetryAt=Date.now()+nextMs; // 让到期定时器与 nudge 都遵守该最早时间
+    schedulePoll(nextMs);
+  });
+}
+boot();
+// end:aigc.

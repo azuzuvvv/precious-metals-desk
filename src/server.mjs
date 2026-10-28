@@ -17,6 +17,12 @@ import {Quotes} from './quotes.mjs';
 import {createRtj} from './rtj.mjs';
 // end:aigc.
 // start:aigc.
+// 访问保护（方案 §13-§17）：令牌桶限流/可信 IP/配置装载 + 访客会话 + 快照缓存独立模块（§8 模块划分）
+import {createTokenBucketLimiter,clientIp,loadProtectConfig} from './rate-limit.mjs';
+import {createViewerSessions} from './viewer-session.mjs';
+import {createSnapshotCache} from './snapshot-cache.mjs';
+// end:aigc.
+// start:aigc.
 // HTTP 源注册表（2026-10-28 重构）：新增一个 HTTP 源 = 新协议模块 + 此处加一项，
 // 不再触碰 server 的 import 之外的启动/命名/关闭逻辑（适配器契约由 Quotes.attach 统一管理）。
 // R01：注册项带来源 id，装配时按 sources 表 enabled/poll_ms/timeout_ms 生效
@@ -45,7 +51,7 @@ const same=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)
 const error=(status,message)=>Object.assign(new Error(message),{status});
 async function body(req){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>256000)throw error(413,'请求内容过大');chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw error(400,'JSON格式无效');}}
 
-export async function createApp({dataDir=join(project,'data'),quotes=null,publicOrigin=process.env.PUBLIC_ORIGIN||null}={}){
+export async function createApp({dataDir=join(project,'data'),quotes=null,publicOrigin=process.env.PUBLIC_ORIGIN||null,protect:protectOverride=null}={}){
   // start:aigc. MySQL 改造：Store.create() 异步建池建表（方案第 6.1 节启动顺序）
   const store=await Store.create(dataDir),sessions=new Map(),attempts=new Map();
   let closing=false;
@@ -79,6 +85,30 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
     itickNote=`后台密钥读取失败：${err.message}`;
   }
   if(itickToken==null&&process.env.ITICK_TOKEN)itickToken=process.env.ITICK_TOKEN;
+  // end:aigc.
+  // start:aigc.
+  // 访问保护装配（方案 §15.2/§16.3）：配置可注入（测试）或从环境装载（含合法范围校验，非法启动即报错）。
+  // 三态模式 off/observe/enforce（§15.2.8）：observe 用同一套判定逻辑只记"会被拒"指标不实际拒绝；
+  // 快照缓存（§15.2.5-6）：请求触发 + TTL 复用 + 单航次重建 + 代次保护，鉴权/限流先于缓存命中。
+  const protectCfg={...loadProtectConfig(),...(protectOverride||{})};
+  const secure=publicOrigin?.startsWith('https://')?' Secure;':'';
+  const viewerSessions=createViewerSessions({
+    idleMs:protectCfg.viewer.idleMs??protectCfg.viewer.idleMinutes*60000, // idleMs 供测试注入更细粒度，env 侧只有分钟
+    maxSessions:protectCfg.viewer.maxSessions,
+    cookieMaxAgeSec:protectCfg.viewer.cookieMaxAgeDays*86400,
+  });
+  const limitSessionQuote=createTokenBucketLimiter(protectCfg.sessionQuote);
+  const limitIpQuote=createTokenBucketLimiter(protectCfg.ipQuote);
+  const limitIssue=createTokenBucketLimiter(protectCfg.sessionIssue);
+  const snapshotCache=createSnapshotCache({
+    ttlMs:protectCfg.cacheTtlMs,
+    build:async()=>{
+      const snap=await store.catalogSnapshot();
+      return Buffer.from(JSON.stringify(snapshot({...snap.config,categories:snap.categories},aggregator)),'utf8');
+    },
+  });
+  // 聚合计数（§13.6/§15.2.8）：只记数量与字节数，不记 Cookie/Token/请求头（§8 日志脱敏）
+  const counters={quotes200:0,quoteBytes:0,quote503:0,noSessionWouldDeny:0,noSessionDenied:0,sessionLimitWouldDeny:0,sessionLimitDenied:0,ipLimitWouldDeny:0,ipLimitDenied:0,issueWouldDeny:0,issueDenied:0};
   // end:aigc.
   const start=()=>{
     if(started)return stopTimer;   // 幂等：重复 start 不重复建连，避免旧 WebSocket/轮询/定时器泄漏
@@ -116,10 +146,29 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
   const json=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));};
   const cookie=(req)=>req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('lcjy_session='))?.slice(13);
   const session=(req)=>{const id=cookie(req),s=sessions.get(id);if(!s||s.expires<Date.now()){if(id)sessions.delete(id);return null;}return s;};
-  const secure=publicOrigin?.startsWith('https://')?' Secure;':'';
+  // start:aigc.
+  // 访客 Cookie 解析与回写串（与管理员 lcjy_session 分开命名，§4.1；HttpOnly/SameSite=Strict/Path=/，HTTPS 时加 Secure）
+  const viewerCookie=(req)=>req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('lcjy_viewer='))?.slice(12);
+  const viewerCookieStr=(id)=>`lcjy_viewer=${id}; HttpOnly;${secure} SameSite=Strict; Path=/; Max-Age=${protectCfg.viewer.cookieMaxAgeDays*86400}`;
+  // end:aigc.
   function login(res){const token=randomBytes(32).toString('hex'),s={csrf:randomBytes(24).toString('hex'),expires:Date.now()+8*3600000};sessions.set(token,s);res.setHeader('set-cookie',`lcjy_session=${token}; HttpOnly;${secure} SameSite=Strict; Path=/; Max-Age=28800`);return {authenticated:true,csrf:s.csrf};}
-  function rateLimit(req){const ip=req.socket.remoteAddress,now=Date.now();let a=attempts.get(ip);if(!a||now-a.start>60000){a={start:now,count:0};attempts.set(ip,a);}if(++a.count>12)throw error(429,'尝试过多，请一分钟后重试');}
-  const cleanup=setInterval(()=>{const now=Date.now();for(const [k,v]of sessions)if(v.expires<now)sessions.delete(k);for(const [k,v]of attempts)if(now-v.start>60000)attempts.delete(k);},60000);cleanup.unref();
+  // start:aigc.
+  // 13.1 修复：admin 限流键改为可信代理客户端 IP（原 socket.remoteAddress 在 Nginx 反代后恒为 127.0.0.1，
+  // 全站共享一个 12 次/分钟桶，刷登录即可锁死管理员登录）。访客与管理员计数器彼此独立（§15.2.3）
+  function rateLimit(req){const ip=clientIp(req,protectCfg),now=Date.now();let a=attempts.get(ip);if(!a||now-a.start>60000){a={start:now,count:0};attempts.set(ip,a);}if(++a.count>12)throw error(429,'尝试过多，请一分钟后重试');}
+  // end:aigc.
+  // start:aigc.
+  // 定时清理：admin 会话/尝试计数沿用原逻辑；追加访客会话空闲清扫（§4.2）。
+  // 保护指标每分钟输出一条聚合日志（增量，§13.6）：只含模式/会话数/计数与字节数，无凭据无 IP 明细
+  const cleanup=setInterval(()=>{const now=Date.now();for(const [k,v]of sessions)if(v.expires<now)sessions.delete(k);for(const [k,v]of attempts)if(now-v.start>60000)attempts.delete(k);viewerSessions.sweep();},60000);cleanup.unref();
+  let protectPrev={};
+  const protectLog=setInterval(()=>{
+    const snap={...counters,...snapshotCache.stats};
+    const delta={};for(const k of Object.keys(snap))delta[k]=snap[k]-(protectPrev[k]||0);
+    protectPrev=snap;
+    console.info('[protect]',JSON.stringify({mode:protectCfg.mode,sessions:viewerSessions.size,...delta}));
+  },60000);protectLog.unref();
+  // end:aigc.
   const server=http.createServer(async(req,res)=>{
     res.setHeader('x-content-type-options','nosniff');res.setHeader('referrer-policy','same-origin');res.setHeader('x-frame-options','DENY');
     res.setHeader('content-security-policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src https://www.jin10.com https://rili-d.jin10.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
@@ -133,7 +182,58 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
         if(!req.headers['content-type']?.startsWith('application/json'))throw error(415,'需要JSON请求');
       }
       // start:aigc.
-      if(path==='/api/quotes'&&req.method==='GET'){const snap=await store.catalogSnapshot();json(res,200,snapshot({...snap.config,categories:snap.categories},aggregator));return;} // 前台快照：R4 一致性读配置+品类，价格/来源读聚合层
+      // 访客会话发放（§4.1/§4.2）：同源 POST（上方已有 Origin/JSON 全局校验）；
+      // 有效 Cookie 幂等复用（不消耗发放额度）；Fetch Metadata 仅拒明显跨站，非真人证明
+      if(path==='/api/viewer/session'&&req.method==='POST'){
+        if(req.headers['sec-fetch-site']==='cross-site')throw error(403,'跨站请求被拒绝');
+        const id=viewerCookie(req),existing=viewerSessions.get(id);
+        const policy={idleMinutes:protectCfg.viewer.idleMinutes,cookieMaxAgeDays:protectCfg.viewer.cookieMaxAgeDays};
+        if(existing){
+          if(viewerSessions.touch(existing))res.setHeader('set-cookie',viewerCookieStr(id));
+          json(res,200,{ok:true,reused:true,policy});return;
+        }
+        // 新会话：每 IP 发放限流（off 跳过；observe 计数放行；enforce 429 + Retry-After，不永久封禁）
+        const issueIp=clientIp(req,protectCfg);
+        const issueResult=protectCfg.mode==='off'?{ok:true}:limitIssue.check(issueIp);
+        if(!issueResult.ok){
+          if(protectCfg.mode==='enforce'){counters.issueDenied++;res.setHeader('retry-after',issueResult.retryAfterSec);throw error(429,'会话创建过于频繁，请稍后重试');}
+          counters.issueWouldDeny++;
+        }
+        const newId=viewerSessions.issue();
+        if(!newId){res.setHeader('retry-after',5);throw error(503,'服务繁忙，请稍后重试');} // 容量满：可重试错误，不驱逐正常看盘会话（§4.2）
+        res.setHeader('set-cookie',viewerCookieStr(newId));
+        json(res,200,{ok:true,reused:false,policy});return;
+      }
+      // 公开行情：鉴权与限流先于缓存命中（§14.4 规则4）；会话/IP 两层限流 + 无会话判定共用一套逻辑，
+      // observe 只记"会被拒"指标、enforce 才实际拒绝（§15.2.8）；缓存重建失败转 503（§15.2.6）
+      if(path==='/api/quotes'&&req.method==='GET'){
+        let renewId=null;
+        if(protectCfg.mode!=='off'){
+          const vid=viewerCookie(req),vs=viewerSessions.get(vid),ip=clientIp(req,protectCfg);
+          if(!vs){
+            if(protectCfg.mode==='enforce'){counters.noSessionDenied++;throw error(401,'会话无效，请刷新页面');}
+            counters.noSessionWouldDeny++;
+          }
+          if(vs){
+            const v=limitSessionQuote.check(vid);
+            if(!v.ok){
+              if(protectCfg.mode==='enforce'){counters.sessionLimitDenied++;res.setHeader('retry-after',v.retryAfterSec);throw error(429,'请求过于频繁，请稍后重试');}
+              counters.sessionLimitWouldDeny++;
+            }
+          }
+          const vi=limitIpQuote.check(ip);
+          if(!vi.ok){
+            if(protectCfg.mode==='enforce'){counters.ipLimitDenied++;res.setHeader('retry-after',vi.retryAfterSec);throw error(429,'请求过于频繁，请稍后重试');}
+            counters.ipLimitWouldDeny++;
+          }
+          if(vs&&viewerSessions.touch(vs))renewId=vid; // 成功访问刷新空闲期；Cookie 剩余不足一天续写
+        }
+        let body;
+        try{body=await snapshotCache.get();}catch{counters.quote503++;res.setHeader('retry-after',1);throw error(503,'行情暂时不可用，请稍后重试');}
+        counters.quotes200++;counters.quoteBytes+=body.length;
+        res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...(renewId?{'set-cookie':viewerCookieStr(renewId)}:{})});
+        res.end(body);return;
+      }
       // end:aigc.
       if(path==='/api/admin/session'&&req.method==='GET'){const s=session(req);json(res,200,{authenticated:!!s,needsSetup:!(await store.hasAdmin()),csrf:s?.csrf||null});return;}
       if(path==='/api/admin/setup'&&req.method==='POST'){
@@ -156,7 +256,7 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
         // start:aigc. 预览走真实报价路径：品类用目录草稿（R02 统一配置源）
         if(path==='/api/admin/preview'&&req.method==='POST'){const data=await body(req);stillAuthorized();const checked=validateCatalog({sources:await store.sources(),baseQuotes:await store.baseQuotes(),categories:Array.isArray(data?.categories)?data.categories:[]});json(res,200,snapshot({...await store.config(),categories:checked.categories},aggregator,{all:true}));return;}
         // end:aigc.
-        if(path==='/api/admin/config'&&req.method==='POST'){const data=await body(req);stillAuthorized();if(!Number.isInteger(data.expectedVersion))throw error(400,'缺少配置版本');const config=await store.save(validateConfig(data.config),data.expectedVersion);json(res,200,{config,version:config.version});return;}
+        if(path==='/api/admin/config'&&req.method==='POST'){const data=await body(req);stillAuthorized();if(!Number.isInteger(data.expectedVersion))throw error(400,'缺少配置版本');const config=await store.save(validateConfig(data.config),data.expectedVersion);snapshotCache.invalidate();json(res,200,{config,version:config.version});return;} // 保存成功即失效公开快照缓存（§14.4 规则3）
         // start:aigc.
         // 三元目录与运行状态 admin API：品类保存即时生效（/api/quotes 每次请求读 categories 表），
         // 基础行情保存需重启后适配器按新目录建连。来源密钥只回是否已配置，永不回明文。
@@ -208,6 +308,7 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
           // end:aigc.
           const version=await store.saveCatalog(data.baseQuotes,data.categories,data.expectedVersion);
           aggregator.updateRequirements(await store.categories()); // 品类公式变化后立即刷新字段需求
+          snapshotCache.invalidate(); // 目录保存成功即失效公开快照缓存（§14.4 规则3；预览不经过缓存）
           json(res,200,{ok:true,version});return;
         }
         // end:aigc.
@@ -233,7 +334,11 @@ export async function createApp({dataDir=join(project,'data'),quotes=null,public
     }catch(e){if(!res.headersSent)json(res,e.status||400,{error:e.message||'请求失败'});else res.end();}
   });
   server.requestTimeout=15000;server.headersTimeout=10000;
-  return {server,store,quotes:aggregator,start,async close(){if(closing)return;closing=true;clearInterval(cleanup);
+  return {server,store,quotes:aggregator,start,
+    // start:aigc. 保护组件暴露：测试断言计数/失效钩子，运维只读观测（§15.5 验收证据）
+    protect:{config:protectCfg,viewerSessions,snapshotCache,counters},
+    // end:aigc.
+    async close(){if(closing)return;closing=true;clearInterval(cleanup);clearInterval(protectLog);
     // start:aigc.
     aggregator.stop();stopTimer?.();
     // end:aigc.
