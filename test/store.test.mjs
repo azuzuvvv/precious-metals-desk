@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTestStore, reopenTestStore, destroyTestStore } from './helpers.mjs';
+import { ITICK_STALE_MS } from '../src/catalog.mjs';
 // end:aigc.
 
 test('首次初始化迁移默认三元目录进 MySQL', async () => {
@@ -20,7 +21,10 @@ test('首次初始化迁移默认三元目录进 MySQL', async () => {
     const baseQuotes = await store.baseQuotes();
     const categories = await store.categories();
     assert.ok(sources.some((s) => s.id === 'rtj'));
-    assert.ok(sources.some((s) => s.id === 'sina'));
+    // start:aigc. 2026-10-29 第四批退役：四源不进 seed 也不得经 sources() 返回（§9.2）
+    for(const gone of ['sina','tencent','yahoo','frankfurter'])
+      assert.ok(!sources.some((s) => s.id === gone),`退役源 ${gone} 不得出现在 sources()`);
+    // end:aigc.
     assert.ok(baseQuotes.some((b) => b.symbol === '黄金'));
     // 业务品类来自 defaults.json rows
     assert.ok(categories.some((c) => c.name === '黄金'));
@@ -72,15 +76,15 @@ test('F02：updateSourceHealth 的 null 不清除历史成功时间与历史错�
       const [[row]] = await store.pool.query('SELECT last_success_at,last_error FROM sources WHERE id=?', [id]);
       return row;
     };
-    await store.updateSourceHealth('sina', '2026-10-28T01:00:00.000Z', 'HTTP 500');
+    await store.updateSourceHealth('wscn', '2026-10-28T01:00:00.000Z', 'HTTP 500');
     // 重启后首轮无行情：写 null 必须保留历史（页面承诺"重启后仍可追溯"）
-    await store.updateSourceHealth('sina', null, null);
-    let row = await read('sina');
+    await store.updateSourceHealth('wscn', null, null);
+    let row = await read('wscn');
     assert.equal(row.last_success_at, '2026-10-28T01:00:00.000Z', 'null 不得清空历史成功时间');
     assert.equal(row.last_error, 'HTTP 500', 'null 不得清空历史错误');
     // 有新事件时正常推进/覆盖
-    await store.updateSourceHealth('sina', '2026-10-28T02:00:00.000Z', 'HTTP 401');
-    row = await read('sina');
+    await store.updateSourceHealth('wscn', '2026-10-28T02:00:00.000Z', 'HTTP 401');
+    row = await read('wscn');
     assert.equal(row.last_success_at, '2026-10-28T02:00:00.000Z');
     assert.equal(row.last_error, 'HTTP 401');
   } finally { await destroyTestStore(store); }
@@ -118,34 +122,106 @@ test('升级迁移保留用户已有基差与自定义品类（R01）', async ()
 });
 // end:aigc.
 // start:aigc.
-test('已迁移库幂等补登记新浪外盘备援（R03）', async () => {
+test('已迁移库幂等补登记新浪外盘备援（R03）+ 第四批退役终态收敛', async () => {
   let store;
   try {
     store = await createTestStore();
-    // 模拟用户禁用伦敦金的新浪备援后重开：补登记不得覆盖 enabled=0
+    // 模拟用户禁用伦敦金的新浪备援后重开（历史中间态操作）
     await store.pool.query("UPDATE base_quote_sources SET enabled=0 WHERE symbol='伦敦金' AND source_id='sina'");
     store = await reopenTestStore(store);
     const rows = await store.baseQuotes();
-    // 时效红线 20s：仅美黄金/美白银保留备援（staleMs=20s），其余 hf_ 全部禁用
-    // start:aigc. 2026-10-28 换源后：sina 备援行仍被 sinaFailover 补登记（行存在、红线 20s），
-    // 但随即被 wscnSources 禁用，实际生效备援为腾讯——两段断言分别验证
-    const usGold = rows.find((b) => b.symbol === '美黄金');
-    const usSina = usGold.sources.find((x) => x.sourceId === 'sina');
-    assert.ok(usSina && usSina.code === 'hf_GC' && usSina.enabled === false, 'sina 美黄金备援应存在但已被换源迁移禁用');
-    assert.equal(usSina.staleMs, 20000, '备援过期阈值应收紧至 20s');
-    const usTx = usGold.sources.find((x) => x.sourceId === 'tencent');
-    assert.ok(usTx && usTx.code === 'hf_GC' && usTx.enabled === true && usTx.staleMs === 20000, '生效备援应为腾讯 hf_GC（红线 20s）');
-    const usSilver = rows.find((b) => b.symbol === '美白银').sources.find((x) => x.sourceId === 'sina');
-    assert.ok(usSilver && usSilver.code === 'hf_SI' && usSilver.enabled === false && usSilver.staleMs === 20000);
+    // start:aigc. 2026-10-29 第四批退役终态：retireSources 在迁移链最后执行——
+    // sina/tencent/yahoo/frankfurter 的全部映射行（含 sinaFailover/wscnSources 曾插入/禁用的）
+    // 一并删除；美黄金/美白银退化为 rtj 单源（§17.2 用户确认接受）
+    for(const gone of ['sina','tencent'])
+      for(const sym of ['美黄金','美白银','伦敦金'])
+        assert.ok(!rows.find((b)=>b.symbol===sym)?.sources.some((x)=>x.sourceId===gone),`${sym} 不残留 ${gone} 映射（退役清理）`);
+    assert.deepEqual(rows.find((b)=>b.symbol==='美黄金').sources.map((s)=>s.sourceId),['rtj'],'美黄金仅剩 rtj');
+    assert.deepEqual(rows.find((b)=>b.symbol==='美白银').sources.map((s)=>s.sourceId),['rtj'],'美白银仅剩 rtj');
+    assert.deepEqual(rows.find((b)=>b.symbol==='美元兑港元').sources.map((s)=>s.sourceId),['wscn'],'美元兑港元仅剩 wscn');
+    // start:aigc. 2026-10-29 沪金/沪银主力改由 iTick 内盘期货供给：退役删除 → 恢复为 itick 单源
+    for(const sym of ['沪金主力','沪银主力'])
+      assert.deepEqual(rows.find((b)=>b.symbol===sym)?.sources.map((s)=>s.sourceId),['itick'],`${sym} 为 itick 单源`);
     // end:aigc.
-    for (const sym of ['伦敦金','伦敦银','美铂金','美钯金','伦敦铂','伦敦钯']) {
-      const s = rows.find((r) => r.symbol === sym).sources.find((x) => x.sourceId === 'sina');
-      assert.ok(!s || s.enabled === false, `${sym} 不得有启用的超时效备援`);
-    }
+    // end:aigc.
   } finally { await destroyTestStore(store); }
 });
 
 // start:aigc.
+// 第四批复查整改验收：退役迁移不得误删用户定制内容——
+// A 公式加过差价的品类保留（基础行情行因无有效源仍删）；
+// B 配置了非退役源映射的品种：基础行情行 + 映射 + 默认透传品类全保留（无孤立映射）；
+// C 默认透传且无任何有效源的品类仍随退役删除（原行为）；
+// D 公式改为引用其他品类的保留
+test('第四批复查：退役迁移不误删用户定制内容（公式改动/其他有效源映射）', async () => {
+  let store;
+  try {
+    store = await createTestStore();
+    const q = (sql, p) => store.pool.query(sql, p);
+    // start:aigc. 新默认目录已登记 iTick 内盘品种，先清空以还原"退役前"形态（只有 sina 源）；
+    // 只清 retireSources 记录随后的重跑，itickCnFutures 仍保持已执行（否则恢复会盖掉断言场景）
+    for (const sym of ['沪金主力', '沪银主力']) {
+      await q('DELETE FROM base_quote_sources WHERE symbol=?', [sym]);
+      await q('DELETE FROM base_quotes WHERE symbol=?', [sym]);
+    }
+    await q("DELETE FROM categories WHERE name IN ('沪金主力','沪银主力','沪金次主力','沪银次主力')");
+    // end:aigc.
+    // 还原退役前形态：sina 可用 + 沪金/沪银主力基础行情（sina 映射）+ 四个品类
+    await q("INSERT INTO sources (id,name,type,enabled,retired) VALUES ('sina','新浪','http',1,0) ON DUPLICATE KEY UPDATE retired=0,enabled=1");
+    await q("INSERT INTO base_quotes (symbol,name,unit,decimals,enabled) VALUES ('沪金主力','沪金主力','元/克',2,1) ON DUPLICATE KEY UPDATE enabled=1");
+    await q("INSERT INTO base_quotes (symbol,name,unit,decimals,enabled) VALUES ('沪银主力','沪银主力','元/千克',1,1) ON DUPLICATE KEY UPDATE enabled=1");
+    await q("INSERT INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES ('沪金主力','sina',1,'sina','nf_AU0',1) ON DUPLICATE KEY UPDATE symbol=symbol");
+    await q("INSERT INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES ('沪银主力','sina',1,'sina','nf_AG0',1) ON DUPLICATE KEY UPDATE symbol=symbol");
+    // 场景B：用户为沪银主力配置了非退役源（wscn）映射
+    await q("INSERT INTO base_quote_sources (symbol,source_id,priority,kind,code,enabled) VALUES ('沪银主力','wscn',2,'wscn','AU0.SHFE',1) ON DUPLICATE KEY UPDATE symbol=symbol");
+    const cat = (id, name, buy) => q(
+      "INSERT INTO categories (id,name,visible,buy_formula,sell_formula,high_formula,low_formula,decimals,rounding,sort) VALUES (?,?,1,?,?,?,?,2,'half-up',0) ON DUPLICATE KEY UPDATE name=name",
+      [id, name, buy, `【#${name}#销售价】`, `【#${name}#最高价】`, `【#${name}#最低价】`]);
+    await cat('t1', '沪金主力', '【#沪金主力#回购价】+3.5');   // A：加差价（定制）
+    await cat('t2', '沪银主力', '【#沪银主力#回购价】');         // B：默认透传但品种有有效源
+    await cat('t3', '沪金次主力', '【#沪金次主力#回购价】');     // C：默认透传且无源
+    await cat('t4', '沪银次主力', '【#黄金#回购价】*0.9');       // D：改引用其他品类（定制）
+    // 删除迁移记录让 reopen 重跑 retireSources（等价线上升级首次执行）
+    await q("DELETE FROM migrations WHERE name='retireSources'");
+    store = await reopenTestStore(store);
+    const bqs = await store.baseQuotes();
+    const cats = await store.categories();
+    // 基础行情：仅剩 sina 映射的沪金主力随退役删除；有 wscn 有效映射的沪银主力保留且仅剩 wscn（无孤立映射）
+    assert.ok(!bqs.some((b) => b.symbol === '沪金主力'), '仅剩退役源映射的沪金主力基础行情应删除');
+    const agRow = bqs.find((b) => b.symbol === '沪银主力');
+    assert.ok(agRow, '配置了非退役源映射的沪银主力基础行情应保留');
+    assert.deepEqual(agRow.sources.map((s) => s.sourceId), ['wscn'], 'sina 映射清理后仅剩 wscn');
+    // 品类四场景逐一验收
+    assert.ok(cats.some((c) => c.name === '沪金主力'), 'A：加过差价的沪金主力品类不得误删');
+    assert.ok(cats.some((c) => c.name === '沪银主力'), 'B：品种仍有有效源的沪银主力品类不得误删');
+    assert.ok(!cats.some((c) => c.name === '沪金次主力'), 'C：默认透传且无源的沪金次主力仍随退役删除');
+    assert.ok(cats.some((c) => c.name === '沪银次主力'), 'D：改过公式的沪银次主力品类不得误删');
+  } finally { await destroyTestStore(store); }
+});
+// end:aigc.
+
+// start:aigc.
+test('P2 复审：iTick 映射过期阈值放宽（新建库与存量库都生效）', async () => {
+  let store;
+  try {
+    store = await createTestStore();
+    const read = async () => (await store.pool.query("SELECT symbol,stale_ms FROM base_quote_sources WHERE source_id='itick' ORDER BY symbol"))[0];
+    // 新建库：seed 带 ITICK_STALE_MS，与 45 秒轮询 + 13 秒间隔匹配
+    for (const r of await read()) assert.equal(Number(r.stale_ms), ITICK_STALE_MS, `${r.symbol} 新建库阈值`);
+    // 存量库：旧行未配置（NULL）或沿用全局 45 秒 → 迁移放宽，且不覆盖用户更宽的配置
+    await store.pool.query("UPDATE base_quote_sources SET stale_ms=NULL WHERE source_id='itick' AND symbol='美元指数'");
+    await store.pool.query("UPDATE base_quote_sources SET stale_ms=20000 WHERE source_id='itick' AND symbol='沪金主力'");
+    await store.pool.query("UPDATE base_quote_sources SET stale_ms=600000 WHERE source_id='itick' AND symbol='沪银主力'");
+    await store.pool.query("DELETE FROM migrations WHERE name='itickStaleWiden'");
+    store = await reopenTestStore(store);
+    const after = Object.fromEntries((await read()).map((r) => [r.symbol, Number(r.stale_ms)]));
+    assert.equal(after['美元指数'], ITICK_STALE_MS, 'NULL 阈值须放宽');
+    assert.equal(after['沪金主力'], ITICK_STALE_MS, '过紧阈值须放宽');
+    assert.equal(after['沪银主力'], 600000, '用户已配的更宽阈值不得被收紧');
+  } finally { await destroyTestStore(store); }
+});
+// end:aigc.
+
 test('一次性迁移登记后不再覆盖用户目录操作（T07）', async () => {
   let store;
   try {
@@ -180,8 +256,11 @@ test('M05：旧版三层库首次升级不重跑修正（含足迹全删的最�
     const rows = await store.baseQuotes();
     const usSina = rows.find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'sina');
     assert.ok(!usSina, '旧库升级：用户删除的映射不得复活（哪怕迁移足迹已全部消失）');
+    // start:aigc. 2026-10-29 第四批修订：旧库升级路径同样完成退役——预置标记只豁免 sinaFailover，
+    // retireSources 仍执行：用户手动启用的 sina 行（退役源）一并清理，不得再作为可用映射回流
     const hkSina = rows.find((b) => b.symbol === '伦敦金').sources.find((x) => x.sourceId === 'sina');
-    assert.ok(hkSina && hkSina.enabled === true, '旧库升级：用户手动启用的备援不得被禁回');
+    assert.ok(!hkSina, '旧库升级：退役源的映射同样被清理（retired 与 enabled 区分，§9.2）');
+    // end:aigc.
     // 预置标记后，后续重启同样稳定跳过
     store = await reopenTestStore(store);
     assert.ok(!(await store.baseQuotes()).find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'sina'));
@@ -200,23 +279,26 @@ test('F03：建表后迁移执行前中断的库重启必须真实执行迁移',
     // 重启：migrations 表存在 → 不预置标记（修复前只查业务表会误预置）→ runMigration 真实执行
     store = await reopenTestStore(store);
     const rows = await store.baseQuotes();
-    // start:aigc. 2026-10-28 换源后终态变化：sinaFailover 先恢复 sina 行（行存在即证明迁移真实执行），
-    // 随后 wscnSources 迁移禁用 sina 备援并启用腾讯备援——断言按新链路验证两个迁移都真实执行
-    const usGold = rows.find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'sina');
-    assert.ok(usGold && usGold.code === 'hf_GC', '中断后重启：sinaFailover 迁移必须真实执行并恢复美黄金备援映射行');
-    assert.ok(usGold.enabled === false, 'wscnSources 迁移必须随后执行并禁用 sina 美黄金备援');
-    const txGold = rows.find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'tencent');
-    assert.ok(txGold && txGold.code === 'hf_GC' && txGold.enabled === true, '美黄金备援已切换为腾讯 hf_GC');
-    const usSilver = rows.find((b) => b.symbol === '美白银').sources.find((x) => x.sourceId === 'sina');
-    assert.ok(usSilver && usSilver.code === 'hf_SI', '中断后重启：美白银备援映射同样恢复');
-    const txSilver = rows.find((b) => b.symbol === '美白银').sources.find((x) => x.sourceId === 'tencent');
-    assert.ok(txSilver && txSilver.code === 'hf_SI' && txSilver.enabled === true, '美白银备援已切换为腾讯 hf_SI');
-    // 且登记写回：再次重启不再重复执行（幂等）；单行读取 rows[0] 不存在时为 undefined
+    // start:aigc. 2026-10-29 第四批终态：迁移链全部真实执行——sinaFailover 恢复行、wscnSources
+    // 启用腾讯备援、retireSources 最终退役清理（sina/tencent 行全删、美黄金/美白银仅剩 rtj）。
+    // 以终态 + 迁移登记共同证明三个迁移都真实执行（中间态被最终迁移收敛，§9.3 重启不复活）
+    const usGoldSina = rows.find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'sina');
+    const usGoldTx = rows.find((b) => b.symbol === '美黄金').sources.find((x) => x.sourceId === 'tencent');
+    assert.ok(!usGoldSina && !usGoldTx, '中断后重启：sina/tencent 映射被 retireSources 最终清理');
+    assert.deepEqual(rows.find((b) => b.symbol === '美黄金').sources.map((s) => s.sourceId), ['rtj']);
+    assert.deepEqual(rows.find((b) => b.symbol === '美白银').sources.map((s) => s.sourceId), ['rtj']);
+    // 且登记写回：再次重启不再重复执行（幂等）
     store = await reopenTestStore(store);
     const [[row]] = await store.pool.query('SELECT name FROM migrations WHERE name=?', ['sinaFailover']);
     assert.ok(row, '迁移执行后必须登记，后续重启跳过');
     const [[row2]] = await store.pool.query('SELECT name FROM migrations WHERE name=?', ['wscnSources']);
     assert.ok(row2, 'wscnSources 迁移执行后必须登记');
+    const [[row3]] = await store.pool.query('SELECT name FROM migrations WHERE name=?', ['retireSources']);
+    assert.ok(row3, 'retireSources 迁移执行后必须登记');
+    // 重启后终态保持（retired 源行不复活、映射不回流）
+    const rows2 = await store.baseQuotes();
+    assert.ok(!rows2.find((b) => b.symbol === '美黄金').sources.some((x) => ['sina','tencent'].includes(x.sourceId)), '重启后退役映射不复活');
+    // end:aigc.
   } finally { await destroyTestStore(store); }
 });
 // end:aigc.

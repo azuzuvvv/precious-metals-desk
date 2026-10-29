@@ -53,6 +53,9 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
   // 品类计算结果不进 values，公式字段静默为空。硬拒绝会误伤既有软引用场景
   // （铑金引用公斤条 + 用户登记公斤条品类），改为快照层提示：不阻塞保存，但明确告知取值为空
   const categoryNames=new Set(categories.map((c)=>c?.name).filter(Boolean));
+  // start:aigc. 2026-10-29 P2：baseSymbols 用于区分"基础 symbol 的源全挂"与"真品类间引用"——
+  // 沪金主力/沪银主力同时是基础行情 symbol 和品类名，meta 缺失时原逻辑误报"品类间引用"
+  const baseSymbols=new Set((config.baseQuotes??[]).map((b)=>b.symbol).filter(Boolean));
   // end:aigc.
   const rows=categories.filter(r=>all||r.visible).map(row=>{
     const out={id:row.id,name:row.name,visible:row.visible,updatedAt:null,stale:false,source:null,sourceName:null,sourceMode:null,derived:false,inputs:[],reason:null};
@@ -64,7 +67,11 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
         // 引用目标是品类名而非基础行情（meta 无此键）：值不可得（M06）
         // F01：仅买卖字段引用品类才升行级提示——高低字段引用不得拖垮健康买卖报价
         //（规则5/F03：高低是辅助字段，缺失只显示 --）
-        if((field==='buy'||field==='sell')&&categoryNames.has(sym)&&!quotes.meta.has(sym))catRef=sym;
+        // start:aigc. 2026-10-29 P2：catRef 判定修正——sym 同时是 base symbol 时不叫"品类间引用"，
+        // 那是"基础行情源全挂"。原逻辑仅凭 categoryNames.has 就报品类引用，沪金主力等自引用透传
+        // 品类（既是 base symbol 又是品类名）被误伤
+        if((field==='buy'||field==='sell')&&categoryNames.has(sym)&&!baseSymbols.has(sym)&&!quotes.meta.has(sym))catRef=sym;
+        // end:aigc.
         const m=quotes.meta.get(sym);
         if(m&&m.updatedAt)usedTimes.push(Date.parse(m.updatedAt));
         if(m)inputMeta.push({name:sym,source:m.sourceName,time:m.updatedAt});
@@ -97,10 +104,23 @@ export function snapshot(config,quotes,{all=false,now=Date.now(),staleMs=60000}=
       out.reason=closed?'已收盘，显示收盘价':partialMode?'部分行情缺失，仅单边报价':'行情已停更，显示最后有效报价';
     }
     // end:aigc.
-      // start:aigc. M06：品类间引用取值为空——源状态正常时也要明确提示（否则手写
-      // B=A 链式公式会静默全 --），但不阻塞保存（软引用是已确认的业务要求）
-      else if(catRef){out.stale=true;out.reason=`公式引用了品类「${catRef}」，品类间引用暂不支持，相应字段为空`;}
-      else if(out.stale)out.reason='源报价超过60秒未更新，请核实';
+      // start:aigc. 2026-10-29 完全无源兜底（沪金/沪银主力这类基础 symbol 自引用但 meta 无 key 的场景）：
+      // 行没有 source、没有 inputs、所有报价字段都是 null → stale=true + "暂无可用数据源"
+      // 同时清理之前遗留的 catRef 文案判定——catRef 只剩真品类间引用（base symbol ∉ baseSymbols 时才可能）
+      // 2026-10-29 P2：固定报价（纯数字公式，无任何行情引用）仍能算出价格，但 source/meta 天然为空，
+      // 必须靠 hasQuote 排除，否则会被误判成"无数据源"
+      const hasQuote = ['buy','sell','high','low'].some((f) => out[f] != null);
+      if (!sourceDown && !catRef && !hasQuote && out.source === null && out.inputs.length === 0 && !out.stale) {
+        out.stale = true;
+        out.reason = '暂无可用数据源';
+      } else if (catRef && !baseSymbols.has(catRef)) {
+        // 真品类引用：catRef 存在且 catRef ∉ baseSymbols（修复后只有这种情况 catRef 才被赋值）
+        out.stale = true;
+        out.reason = `公式引用了品类「${catRef}」，品类间引用暂不支持，相应字段为空`;
+      } else if (out.stale && !sourceDown && !catRef) {
+        out.reason = '源报价超过60秒未更新，请核实';
+      }
+      // end:aigc.
     return out;
   });
   const metas=[...quotes.meta.values()];

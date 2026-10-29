@@ -143,6 +143,8 @@ document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected
 // 业务品类/基础行情页签进入时加载目录草稿（未修改时刷新）；数据源页签额外拉红绿灯与切换日志
 if(button.dataset.tab==='categories'||button.dataset.tab==='basequotes'){if(!catalogDirty)loadCatalog().catch(e=>message(e.message,true));}
 if(button.dataset.tab==='sourcelog'){if(!catalogDirty)loadCatalog().catch(e=>message(e.message,true));loadSources().catch(e=>message(e.message,true));loadSwitchLogs().catch(e=>message(e.message,true));}
+// start:aigc. 访问管理（§3）：进入页签启动 10s 自动刷新，切出/隐藏暂停
+if(button.dataset.tab==='access')startAccessTimer();else stopAccessTimer();
 // end:aigc.
 });
 // start:aigc.
@@ -152,5 +154,138 @@ $('logout').onclick=()=>task($('logout'),async()=>{if((dirty||catalogDirty)&&!co
 $('password-form').onsubmit=event=>{event.preventDefault();task($('password-form').querySelector('button'),async()=>{if($('new-password').value!==$('new-password-confirm').value)throw Error('两次新密码输入不一致');await api('password',{oldPassword:$('old-password').value,newPassword:$('new-password').value});$('password-form').reset();dirty=false;showAuth(false);message('密码已更新，请重新登录。');});};
 // start:aigc. 目录页签未保存同样拦截
 window.addEventListener('beforeunload',event=>{if(dirty||catalogDirty){event.preventDefault();event.returnValue='';}});
+// end:aigc.
+// start:aigc.
+// 访问管理（方案 §3，第二批只读）：10 秒自动刷新、隐藏或切出页签暂停；管理查询本身不计入访客行情统计。
+// 顶部健康状态显式标注统计缺口/降级/汇总延迟（§3 不以零请求伪装正常）；灯色仅绿/黄（红=手动封禁第三批）。
+let accessTimer=null,accessPage=1,accessLast=null,blocksPage=1,blocksLast=null;
+const ACCESS_PAGE_SIZE=20;
+function stopAccessTimer(){if(accessTimer){clearInterval(accessTimer);accessTimer=null;}}
+function startAccessTimer(){stopAccessTimer();loadAccess();accessTimer=setInterval(loadAccess,10000);}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAccessTimer();else if(catalogTab()==='access')startAccessTimer();});
+async function loadAccess(){
+  if(catalogTab()!=='access')return;
+  try{
+    const q=new URLSearchParams({page:accessPage,size:ACCESS_PAGE_SIZE,sort:$('access-sort').value});
+    const f=$('access-ip-filter').value.trim();if(f)q.set('ip',f);
+    // 访问统计与有效封禁两条独立分页（B-05a/b）：互不挤占、互不插零
+    const [stats,blocks]=await Promise.all([api('access/ips?'+q.toString()),api(`access/blocks?page=${blocksPage}&size=${ACCESS_PAGE_SIZE}`)]);
+    accessLast=stats;blocksLast=blocks;
+    renderAccess();renderBlocks();
+  }catch(e){message(e.message,true);stopAccessTimer();}
+}
+const fmtMinuteUtc=(utc)=>utc?new Date(utc*60000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
+const fmtMs=(ms)=>ms?new Date(ms).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'';
+function renderAccess(){
+  const d=accessLast;if(!d)return;
+  const s=d.summary||{};
+  const warn=[];
+  if(s.redisDegraded)warn.push('访问保护降级中（统计可能缺失）');
+  if((s.lossMinutes||[]).length)warn.push('统计缺口分钟：'+s.lossMinutes.map(fmtMinuteUtc).join('、'));
+  if(s.flush&&s.flush.lastError)warn.push('汇总延迟：'+s.flush.lastError);
+  $('access-summary').replaceChildren(
+    el('span',`保护模式：${d.mode}`),
+    el('span',`最近完整1分钟请求：${s.lastComplete&&s.lastComplete.fields?s.lastComplete.fields.req:'—'}`),
+    el('span',`当前分钟请求（实时）：${s.cur?s.cur.req:'—'}`),
+    el('span',`新建会话（1分钟）：${s.lastComplete&&s.lastComplete.fields?s.lastComplete.fields.issue:'—'}`),
+    el('span',`统计截至：${s.statsLastOkAt?fmtMs(s.statsLastOkAt):'尚无成功写入'}`),
+    ...(warn.length?[el('b','⚠ '+warn.join('；'))]:[]),
+    ...(d.truncated?[el('b','明细已截断：按请求数排序时最多聚合最近 500 个 IP')]:[]),
+  );
+  const rows=d.rows.map(r=>{
+    const tr=el('tr');
+    // S2-01 修复：原生 Element.append 返回 undefined，不能链式回传外层；
+    // 先建 td/tr、子级 append 完成后再交给外层，否则状态灯丢失且出现"undefined"文本
+    const statusText=r.status==='red'?'红':r.status==='yellow'?'黄':'绿';
+    const statusCls=r.status==='red'?'red':r.status==='yellow'?'yellow':'green';
+    const tdDot=el('td');tdDot.append(el('span',statusText,'dot dot-'+statusCls));
+    const pct=r.m10.req?Math.round(r.m10.noSess*100/r.m10.req)+'%':'—';
+    // 第三批（§5）：封禁/解封操作按钮；被封禁到期时间并入原因列
+    const tdOp=el('td');
+    const btn=r.blocked?el('button','解封'):el('button','封禁');
+    btn.onclick=()=>r.blocked?openUnblock(r):openBlock(r);
+    tdOp.append(btn);
+    const reasonText=(r.reasons||[]).join('；')+(r.blockedUntilMs?`（至 ${new Date(r.blockedUntilMs).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})}）`:'');
+    tr.append(tdDot,
+      el('td',r.ip),
+      el('td',fmtMs(r.lastSeen)),
+      el('td',String(r.m1?r.m1.req:0)),
+      el('td',String(r.m10?r.m10.req:0)),
+      el('td',pct),
+      el('td',r.sessionsTruncated?r.sessions10m+'+（已截断）':String(r.sessions10m||0)),
+      el('td',reasonText),
+      tdOp);
+    return tr;
+  });
+  // S2-01：空态行同样先建 tr 再挂 td，避免 replaceChildren(undefined)
+  if(rows.length)$('access-rows').replaceChildren(...rows);
+  else{const empty=el('td','最近 24 小时暂无访问记录（或该 IP 不在最近访问索引中）。');empty.colSpan=9;const emptyTr=el('tr');emptyTr.append(empty);$('access-rows').replaceChildren(emptyTr);}
+  const pages=Math.max(1,Math.ceil(d.total/ACCESS_PAGE_SIZE));
+  $('access-page-info').textContent=`第 ${d.page}/${pages} 页 · 共 ${d.total} 个 IP（最近 24 小时）`;
+}
+$('access-refresh').onclick=()=>{accessPage=1;blocksPage=1;loadAccess();};
+$('access-prev').onclick=()=>{if(accessPage>1){accessPage--;loadAccess();}};
+$('access-next').onclick=()=>{const pages=Math.max(1,Math.ceil((accessLast?accessLast.total:0)/ACCESS_PAGE_SIZE));if(accessPage<pages){accessPage++;loadAccess();}};
+$('access-ip-filter').onchange=()=>{accessPage=1;loadAccess();};
+$('access-sort').onchange=()=>{accessPage=1;loadAccess();};
+// start:aigc. 有效封禁独立分页（B-05a/b）：渲染 + 翻页；行内解封复用统一对话框
+const fmtFull=(ms)=>ms?new Date(ms).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'';
+function renderBlocks(){
+  const d=blocksLast;if(!d)return;
+  const rows=d.rows.map((r)=>{
+    const tr=el('tr');
+    const tdOp=el('td');
+    const btn=el('button','解封');
+    btn.onclick=()=>openUnblock({ip:r.ip,blockedUntilMs:r.blockedUntilMs,blockedRowVersion:r.blockedRowVersion});
+    tdOp.append(btn);
+    tr.append(el('td',r.ip),el('td',fmtFull(r.blockedUntilMs)),el('td',r.lastSeen?fmtMs(r.lastSeen):'（近 24 小时无访问）'),el('td',r.blockedReason),tdOp);
+    return tr;
+  });
+  if(rows.length)$('blocks-rows').replaceChildren(...rows);
+  else{const td=el('td','当前没有有效封禁。');td.colSpan=5;const tr=el('tr');tr.append(td);$('blocks-rows').replaceChildren(tr);}
+  const pages=Math.max(1,Math.ceil(d.total/ACCESS_PAGE_SIZE));
+  $('blocks-page-info').textContent=d.total?`第 ${d.page}/${pages} 页 · 共 ${d.total} 条`:'';
+}
+$('blocks-prev').onclick=()=>{if(blocksPage>1){blocksPage--;loadAccess();}};
+$('blocks-next').onclick=()=>{const pages=Math.max(1,Math.ceil((blocksLast?blocksLast.total:0)/ACCESS_PAGE_SIZE));if(blocksPage<pages){blocksPage++;loadAccess();}};
+// end:aigc.
+// start:aigc.
+// 手动封禁/解封（§5，第三批）：必填原因 + 二次确认（明示同一 IP 可能有多个设备、observe 同样生效）；
+// 解封必须带行版本（expectedVersion），冲突 409 时提示刷新。行版本在列表 rows 的 blockedRowVersion。
+let blockTarget=null,unblockTarget=null;
+function openBlock(row){
+  blockTarget=row;
+  $('block-title').textContent='封禁 '+row.ip;
+  $('block-hint').textContent='保存后立即禁止该 IP 看盘（当前为'+({observe:'观测',enforce:'强制',off:'关闭'}[accessLast?.mode]||'当前')+'模式也同样生效）。同一 IP 可能有多个家庭/店铺共用设备，请确认影响。';
+  $('block-form').reset();$('block-custom-field').hidden=true;
+  $('block-dialog').showModal();
+}
+function openUnblock(row){
+  unblockTarget=row;
+  $('unblock-hint').textContent='解除 '+row.ip+' 的封禁（至 '+new Date(row.blockedUntilMs).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+'）。解封后该 IP 约 30 秒内自动恢复看盘，无需重启。';
+  $('unblock-form').reset();
+  $('unblock-dialog').showModal();
+}
+$('block-minutes').onchange=()=>{$('block-custom-field').hidden=$('block-minutes').value!=='custom';};
+$('close-block').onclick=()=>$('block-dialog').close();
+$('close-unblock').onclick=()=>$('unblock-dialog').close();
+$('block-save').onclick=()=>{ if($('block-form').reportValidity()===false)return;
+  const minutes=$('block-minutes').value==='custom'?Number($('block-custom').value):Number($('block-minutes').value);
+  if(!Number.isInteger(minutes)||minutes<1||minutes>10080){message('时长必须为 1 分钟至 7 天',true);return;}
+  if(!confirm(`确认封禁 ${blockTarget.ip}？保存后立即禁止该 IP 看盘。`))return;
+  task($('block-save'),async()=>{
+    await api('access/block',{ip:blockTarget.ip,minutes,reason:$('block-reason').value.trim()});
+    $('block-dialog').close();message('已封禁 '+blockTarget.ip+'（立即生效）');
+    await loadAccess();
+  });
+};
+$('unblock-save').onclick=()=>{ if($('unblock-form').reportValidity()===false)return;
+  if(!confirm(`确认解除 ${unblockTarget.ip} 的封禁？`))return;
+  task($('unblock-save'),async()=>{
+    await api('access/unblock',{ip:unblockTarget.ip,reason:$('unblock-reason').value.trim(),expectedVersion:unblockTarget.blockedRowVersion});
+    $('unblock-dialog').close();message('已解封 '+unblockTarget.ip);
+    await loadAccess();
+  });
+};
 // end:aigc.
 (async()=>{try{const session=await api('session');if(session.authenticated){csrf=session.csrf;await load();}else showAuth(session.needsSetup);}catch(e){$('loading').textContent='后台加载失败，可刷新重试。';message(e.message,true);}})();

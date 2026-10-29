@@ -71,4 +71,33 @@ export async function destroyTestStore(store){
 
 // 转成可直接注入 process.env 的 DB_* 变量（createApp 内部 Store.create 读取这些变量）
 export const testDbEnv=(database)=>{const p=adminParams();return {DB_HOST:p.host,DB_PORT:String(p.port),DB_USER:p.user,DB_PASSWORD:p.password,DB_NAME:database};};
+
+// start:aigc. Redis 测试基建（审查 R2/R2残留）：随机测试命名空间 + 严格清理校验 + 就绪超时。
+// 测试一律使用 lcjy:test:<random>: 前缀，与生产前缀 lcjy:quote:access:v1: 完全隔离，
+// 清理只删本次随机前缀，且拒绝生产/空/宽泛 pattern，防止误删真实访问状态。
+// start:aigc. 每次测试进程生成唯一命名空间（12 位 hex），createApp/limiter/sessions 全链路注入
+export const randomTestPrefix=()=>`lcjy:test:${randomBytes(6).toString('hex')}:`;
+// 清理 pattern 白名单：必须是本 helper 生成的随机测试前缀 + 通配符，其余一律拒绝
+const SAFE_TEST_PATTERN=/^lcjy:test:[a-f0-9]{12}:\*$/;
+export async function scanDelPrefix(redis,pattern){
+  if(!SAFE_TEST_PATTERN.test(pattern))throw new Error(`拒绝清理非随机测试命名空间: ${pattern}`);
+  let cursor='0';
+  do{
+    const [next,keys]=await redis.scan(cursor,'MATCH',pattern,'COUNT',200);
+    cursor=next;
+    if(keys.length)await redis.del(...keys);
+  }while(cursor!=='0');
+}
+// 等待 Redis 就绪（带超时）：enableOfflineQueue:false 下命令不排队，未就绪即失败；
+// 不监听 error 事件（ioredis 重连期间会周期性报错，最终 ready 即算成功），只等 ready 或超时退出
+export function waitRedisReady(client,timeoutMs=5000){
+  if(client.status==='ready')return Promise.resolve();
+  return new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>{client.off('ready',onReady);reject(new Error(`Redis ${timeoutMs}ms 内未就绪（status=${client.status}）`));},timeoutMs);
+    const onReady=()=>{clearTimeout(timer);resolve();};
+    client.once('ready',onReady);
+  });
+}
+// end:aigc.
+// end:aigc.
 // end:aigc.

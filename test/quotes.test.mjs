@@ -71,6 +71,18 @@ test('黄金快照带来源元数据且公式可加销售价差',()=>{
   assert.equal(row.source,'rtj');assert.equal(row.sourceName,'融通金');assert.equal(row.sourceMode,'primary');assert.equal(row.stale,false);assert.equal(row.derived,false);
 });
 // end:aigc.
+// start:aigc. 2026-10-29 P2 回归：固定报价（纯数字公式、无任何行情引用）能算出价格但天然没有
+// source/meta，旧兜底逻辑会把它误判成"暂无可用数据源"并标停更
+test('固定报价品类不因无来源被误判停更',()=>{
+  const q=new Quotes({baseQuotes:[]});
+  const cfg={version:1,brand:{},openMode:'open',schedule:['','','','','','',''],categories:[
+    {id:'9001',name:'工费固定',visible:true,buyFormula:'10',sellFormula:'12',highFormula:'',lowFormula:'',decimals:2,rounding:'half-up'},
+  ]};
+  const row=snapshot(cfg,q).rows[0];
+  assert.equal(row.buy,'10.00');assert.equal(row.sell,'12.00');
+  assert.equal(row.stale,false);assert.equal(row.reason,null);
+});
+// end:aigc.
 // end:aigc.
 
 // start:aigc.

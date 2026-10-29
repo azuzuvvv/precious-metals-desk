@@ -174,6 +174,28 @@
       "rounding": "half-up"
     },
     {
+      "id": "4391",
+      "name": "沪金主力",
+      "visible": true,
+      "buyFormula": "【#沪金主力#回购价】",
+      "sellFormula": "【#沪金主力#销售价】",
+      "highFormula": "【#沪金主力#最高价】",
+      "lowFormula": "【#沪金主力#最低价】",
+      "decimals": 2,
+      "rounding": "half-up"
+    },
+    {
+      "id": "4393",
+      "name": "沪银主力",
+      "visible": true,
+      "buyFormula": "【#沪银主力#回购价】",
+      "sellFormula": "【#沪银主力#销售价】",
+      "highFormula": "【#沪银主力#最高价】",
+      "lowFormula": "【#沪银主力#最低价】",
+      "decimals": 1,
+      "rounding": "half-up"
+    },
+    {
       "id": "4409",
       "name": "美元指数",
       "visible": true,
@@ -270,50 +292,6 @@
       "highFormula": "【#黄金9995#最高价】",
       "lowFormula": "【#黄金9995#最低价】",
       "decimals": 2,
-      "rounding": "half-up"
-    },
-    {
-      "id": "4391",
-      "name": "沪金主力",
-      "visible": true,
-      "buyFormula": "【#沪金主力#回购价】",
-      "sellFormula": "【#沪金主力#销售价】",
-      "highFormula": "【#沪金主力#最高价】",
-      "lowFormula": "【#沪金主力#最低价】",
-      "decimals": 2,
-      "rounding": "half-up"
-    },
-    {
-      "id": "4392",
-      "name": "沪金次主力",
-      "visible": false,
-      "buyFormula": "【#沪金次主力#回购价】",
-      "sellFormula": "【#沪金次主力#销售价】",
-      "highFormula": "【#沪金次主力#最高价】",
-      "lowFormula": "【#沪金次主力#最低价】",
-      "decimals": 2,
-      "rounding": "half-up"
-    },
-    {
-      "id": "4393",
-      "name": "沪银主力",
-      "visible": true,
-      "buyFormula": "【#沪银主力#回购价】",
-      "sellFormula": "【#沪银主力#销售价】",
-      "highFormula": "【#沪银主力#最高价】",
-      "lowFormula": "【#沪银主力#最低价】",
-      "decimals": 1,
-      "rounding": "half-up"
-    },
-    {
-      "id": "4394",
-      "name": "沪银次主力",
-      "visible": false,
-      "buyFormula": "【#沪银次主力#回购价】",
-      "sellFormula": "【#沪银次主力#销售价】",
-      "highFormula": "【#沪银次主力#最高价】",
-      "lowFormula": "【#沪银次主力#最低价】",
-      "decimals": 1,
       "rounding": "half-up"
     },
     {

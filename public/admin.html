@@ -6,7 +6,7 @@
 <section id="workspace" hidden><div class="heading"><div><span class="eyebrow">龙城金艺 / 行情配置</span><h1>报价规则</h1><!-- start:aigc. --><p>品牌与营业时间在此保存；品种基差请使用「业务品类」页签，保存后即时生效。</p><!-- end:aigc. --></div><span id="version" class="badge"></span></div>
 <div class="toolbar"><span id="dirty-state">已保存</span><div><button id="reload">重新加载</button><!-- start:aigc. --><button id="preview">预览目录报价</button><!-- end:aigc. --><button id="save" class="primary">保存并生效</button></div></div>
 <!-- start:aigc. 行情目录拆分为三个页签（业务品类/基础行情/数据源与日志）：业务品类为运营主配置区放首位且默认选中 -->
-<nav class="tabs" aria-label="管理功能"><button data-tab="categories" aria-selected="true">业务品类</button><button data-tab="brand">品牌与营业时间</button><button data-tab="basequotes">基础行情</button><button data-tab="sourcelog">数据源与日志</button><button data-tab="history">修改记录</button><button data-tab="account">账号与备份</button></nav>
+<nav class="tabs" aria-label="管理功能"><button data-tab="categories" aria-selected="true">业务品类</button><button data-tab="brand">品牌与营业时间</button><button data-tab="basequotes">基础行情</button><button data-tab="sourcelog">数据源与日志</button><button data-tab="access">访问管理</button><button data-tab="history">修改记录</button><button data-tab="account">账号与备份</button></nav>
 <section id="categories" class="tab-panel card"><div class="section-title"><h2>业务品类</h2><div><span id="catalog-dirty" class="badge"></span> <button id="preview-cat">预览报价</button> <button id="add-category">＋ 新增品类</button> <button id="catalog-save" class="primary">保存并生效</button></div></div><p class="hint">品类排序即前台展示顺序；显隐、公式、精度保存后即时生效。基差=公式末尾加减项，如 【#黄金#回购价】+0.5。修改后建议先「预览报价」核对。</p><div id="catalog-rows"></div></section>
 <!-- end:aigc. -->
 <!-- start:aigc. 默认页签改为品牌（旧「品种与基差」页签退役，R02） -->
@@ -16,6 +16,35 @@
 <section id="basequotes" class="tab-panel card" hidden><div class="section-title"><h2>基础行情与来源映射</h2><div><button id="add-base-quote">＋ 新增基础行情</button> <button id="catalog-save-base" class="primary">保存目录</button></div></div><p class="hint">技术配置区：行情键、来源映射（源ID/类型/代码/优先级/过期阈值）的增删调整，保存后需重启服务生效。</p><div id="catalog-base"></div></section>
 <!-- start:aigc. 数据源红绿灯（设计文档"数据源管理"）：状态灯+品种健康数+最近成功/最近错误+密钥配置 -->
 <section id="sourcelog" class="tab-panel" hidden><div class="card"><div class="section-title"><h2>数据源状态</h2><button id="refresh-switch-logs">刷新状态与日志</button></div><p class="hint">红绿灯为运行期数据聚合，非主动连通性拨测：绿=订阅品种全部正常，黄=部分正常或数据过期，红=连接失败或未响应，灰=已停用，空心=无任何启用的品种映射。最近成功/最近错误每分钟落库且不清除历史（重启后仍可追溯）。iTick 密钥在此配置（加密存储，后台优先、ITICK_TOKEN 环境变量兜底），修改后需重启服务生效。</p><div class="table-scroll"><table><thead><tr><th>状态</th><th>数据源</th><th>品种（健康/总数）</th><th>最近成功</th><th>最近错误</th><th>密钥</th><th></th></tr></thead><tbody id="source-rows"></tbody></table></div></div><div class="card"><h2>来源切换日志</h2><div id="switch-log-list"></div></div></section>
+<!-- end:aigc. -->
+<!-- start:aigc. 访问管理页签（方案 §3，第二批只读统计）：灯色绿/黄 + 缺口/降级显式标注；红灯=手动封禁（第三批） -->
+<section id="access" class="tab-panel" hidden><div class="card"><div class="section-title"><h2>访问管理</h2><div><input id="access-ip-filter" placeholder="按 IP 精确筛选" spellcheck="false" style="width:180px"> <select id="access-sort"><option value="lastSeen">按最近访问</option><option value="req10m">按10分钟请求数</option></select> <button id="access-refresh">刷新</button></div></div>
+<div id="access-summary" style="display:flex;flex-wrap:wrap;gap:8px 18px;margin:8px 0;font-size:13px"></div>
+<p class="hint">绿=观察窗口内无明显访问异常，黄=达到观察阈值（需要排查，不等于已确认爬虫），红=手动封禁（第三批上线）。分钟窗口按服务端 UTC 分桶、界面显示北京时间；"1分钟"为最近完整分钟，当前分钟为实时值。统计缺口、访问保护降级或汇总延迟会明确标注，不以零请求伪装正常。默认显示最近 24 小时访问过的 IP；会话数为 10 分钟窗口内不同有效会话去重，并非在线人数。</p>
+<div class="table-scroll"><table><thead><tr><th>状态</th><th>IP</th><th>最近访问</th><th>1分钟请求</th><th>10分钟请求</th><th>无会话占比(10m)</th><th>会话数(10m)</th><th>原因</th><th>操作</th></tr></thead><tbody id="access-rows"></tbody></table></div>
+<div class="section-title" style="margin-top:10px"><span id="access-page-info"></span><div><button id="access-prev">上一页</button> <button id="access-next">下一页</button></div></div>
+</div>
+<!-- start:aigc. 有效封禁独立分页（B-05a/b）：与访问统计列表解耦，含近期无访问的被封 IP -->
+<div class="card" style="margin-top:14px"><div class="section-title"><h2>有效封禁</h2><div><span id="blocks-page-info"></span> <button id="blocks-prev">上一页</button> <button id="blocks-next">下一页</button></div></div>
+<p class="hint">手动封禁独立分页（含近期无访问的 IP），到期自动失效；解封立即生效，该 IP 约 30 秒内自动恢复看盘。对任意 IP 的封禁可直接在上方访问列表行内操作。</p>
+<div class="table-scroll"><table><thead><tr><th>IP</th><th>封禁至</th><th>最近访问</th><th>原因</th><th>操作</th></tr></thead><tbody id="blocks-rows"></tbody></table></div>
+</div>
+</section>
+<!-- end:aigc. -->
+<!-- start:aigc. 手动封禁对话框（§5，第三批）：必填原因+时长 1 分钟至 7 天（默认 1 小时，无永久）；
+保存即生效（observe 模式同样生效）；同一 IP 可能有多个家庭/店铺设备，二次确认提示 -->
+<dialog id="block-dialog"><form id="block-form" method="dialog" class="narrow"><div class="section-title"><h2 id="block-title">封禁 IP</h2><button type="button" id="close-block" aria-label="关闭">关闭</button></div>
+<p class="hint" id="block-hint"></p>
+<label>封禁时长<select id="block-minutes"><option value="5">5 分钟</option><option value="60" selected>1 小时</option><option value="1440">24 小时</option><option value="custom">自定义（分钟）</option></select></label>
+<label id="block-custom-field" hidden>自定义分钟数（1-10080）<input id="block-custom" type="number" min="1" max="10080" value="60"></label>
+<label>原因（必填）<input id="block-reason" maxlength="512" required></label>
+<div><button id="block-save" class="primary">确认封禁</button></div>
+</form></dialog>
+<dialog id="unblock-dialog"><form id="unblock-form" method="dialog" class="narrow"><div class="section-title"><h2>解除封禁</h2><button type="button" id="close-unblock" aria-label="关闭">关闭</button></div>
+<p class="hint" id="unblock-hint"></p>
+<label>解封原因（必填）<input id="unblock-reason" maxlength="512" required></label>
+<div><button id="unblock-save" class="primary">确认解封</button></div>
+</form></dialog>
 <!-- end:aigc. -->
 <section id="history" class="tab-panel card" hidden><div class="section-title"><h2>修改记录</h2><button id="refresh-history">刷新记录</button></div><div id="history-list"></div></section>
 <section id="account" class="tab-panel" hidden><div class="card"><h2>配置备份</h2><!-- start:aigc. 导出已含实际生效的行情目录（R11） --><p>下载完整配置：品牌、营业时间与行情目录（品类公式、基础行情及来源映射，不含密钥）。完整数据库备份请在项目目录运行 <code>node scripts/backup.mjs</code>。</p><!-- end:aigc. --><a class="button" href="/api/admin/export" download>导出完整配置</a></div><div class="card"><h2>修改密码</h2><form id="password-form" class="narrow"><label>原密码<input type="password" id="old-password" required autocomplete="current-password"></label><label>新密码<input type="password" id="new-password" required minlength="12" maxlength="256" autocomplete="new-password"></label><label>再次输入新密码<input type="password" id="new-password-confirm" required minlength="12" maxlength="256" autocomplete="new-password"></label><button>修改密码并退出</button></form></div></section>

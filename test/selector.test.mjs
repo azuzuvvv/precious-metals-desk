@@ -54,6 +54,20 @@ test('超时变 stale，全部失效时保留 last-known', () => {
   assert.equal(s.getTick('美元指数', now + 45001).buy, 103.5);
 });
 
+test('P2 复审：STALE 收到一个新 tick 立即恢复健康（不再等 3 轮）', () => {
+  // start:aigc. 2026-10-29 P2：45 秒轮询下，旧机制从 STALE 恢复要连续 3 轮（135 秒），
+  // 期间报价其实已在更新却仍显示"停更"。STALE 只是超时，不是连接失败，一个 tick 就该恢复
+  const s = new Selector({ staleMs: 200 }); s.configure(BASE);
+  s.ingest('美元指数', 'sina', tick(1000), { now: 1000 });
+  const t1 = 1201;
+  s.refresh(t1);
+  assert.equal(s.state('美元指数', t1).mode, 'last-known', '超时应先降级');
+  s.ingest('美元指数', 'sina', tick(t1), { now: t1 });
+  assert.equal(s.state('美元指数', t1).mode, 'primary', '新报价到达即恢复 primary');
+  assert.equal(s.state('美元指数', t1).status, HEALTHY);
+  // end:aigc.
+});
+
 test('切换时触发 onSwitch 日志', () => {
   const events = []; const s = new Selector({ onSwitch: (e) => events.push(e) }); s.configure(BASE);
   let now = 1000;

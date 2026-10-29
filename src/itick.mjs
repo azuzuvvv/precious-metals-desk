@@ -8,9 +8,14 @@ import { createPollingAdapter } from './polling-adapter.mjs';
 import { normalizeTick } from './adapter.mjs';
 
 const BASE = 'https://api-free.itick.org';   // 免费版专用域名；api.itick.org 会报 Invalid API key
-// start:aigc. iTick 按类型分端点：indices（指数）/forex（外汇），code 不能混端点批量 → 逐码请求
+// start:aigc. iTick 按类型分端点：indices（指数）/forex（外汇）/future（期货），code 不能混端点批量 → 逐码请求。
+// region 随类型不同：指数走 GB，内盘期货走 CN（2026-10-29 实测：future/quote?region=CN&code=AU 返回沪金主力连续实时价）
 const ITICK_QMAP = {
-  DXY: { type: 'indices' },
+  DXY: { type: 'indices', region: 'GB' },
+  // start:aigc. 沪金/沪银主力（SHFE 主力连续）：sina nf_AU0/nf_AG0 退役后的唯一源
+  AU: { type: 'future', region: 'CN' },
+  AG: { type: 'future', region: 'CN' },
+  // end:aigc.
 };
 // end:aigc.
 
@@ -60,13 +65,24 @@ export function createItickAdapter(baseQuotes, { fetchImpl = fetch, token = proc
   }
   // start:aigc. R02：逐码请求必须带 symbols 归属——单码失败只判该品种，
   // 将来加第二码（如 XAUUSD）时互不牵连
-  const reqFor = (code, quoteMap) => [{ url: `${BASE}/${ITICK_QMAP[code].type}/quote?region=GB&code=${code}`, headers: { token }, symbols: (quoteMap[code] ?? []).map((q) => q.symbol) }];
+  const reqFor = (code, quoteMap) => {
+    const m = ITICK_QMAP[code];
+    return [{ url: `${BASE}/${m.type}/quote?region=${m.region}&code=${code}`, headers: { token }, symbols: (quoteMap[code] ?? []).map((q) => q.symbol) }];
+  };
   return createPollingAdapter({
     id: 'itick', name: 'iTick', baseQuotes, fetchImpl,
-    intervalMs: 30000,   // 免费版 5 次/分钟 → 2 次/分钟留余量
-    // start:aigc. R06：供应商配额是协议红线，优先于全局配置钳制——poll_ms 覆盖值
-    // 强制 ≥30s，防止数据库配置把轮询提到 12 次/分钟突破 5 次/分钟配额
-    pollMs: pollMs != null ? Math.max(Math.floor(pollMs), 30000) : null,
+    // start:aigc. 免费版 5 次/分钟且按 code 逐条请求：3 码（DXY/AU/AG）× 60/45s ≈ 4 次/分钟，
+    // 留 1 次余量；此前只有 DXY 时是 30 秒（2 次/分钟），加内盘期货后必须降频
+    intervalMs: 45000,
+    // 2026-10-29 P2 复审：45s 周期 × 3 码背靠背发出，任意 60 秒窗口可命中 6 次
+    // （0/45 两个周期的 3 连发），超出免费版 5 次/分钟。逐请求拉开 13 秒：
+    // 间隔 13s 的请求在任意 60s 窗口最多 5 个（6 个需跨 65 秒），从根上锁死配额。
+    // 3 码正好铺满 26 秒，仍小于 45 秒周期，不会造成轮询重叠
+    minGapMs: 13000,
+    // R06：供应商配额是协议红线，优先于全局配置钳制——poll_ms 覆盖值强制 ≥45s，
+    // 防止数据库配置把轮询提到 4 次/分钟以上突破 5 次/分钟配额
+    pollMs: pollMs != null ? Math.max(Math.floor(pollMs), 45000) : null,
+    // end:aigc.
     reqTimeoutMs: timeoutMs,
     buildQuotes: buildItickQuotes,
     requestsFor: (codes, quoteMap) => codes.filter((c) => ITICK_QMAP[c]).flatMap((c) => reqFor(c, quoteMap)),

@@ -12,17 +12,19 @@ export const FIELD_LABELS={buy:'回购价',sell:'销售价',high:'最高价',low
 // 基础行情仅登记「有实时数据源」的品种；硬缺口品种（公斤条/公斤铂/公斤钯/公斤银/
 // 沪金次主力/沪银次主力/美铑金）不在 seed 内，后续由用户按公式自行配置。
 // end:aigc.
+// start:aigc. 2026-10-29 P2 复审：iTick 映射的过期阈值。轮询 45 秒 + 13 秒逐请求间隔，
+// 同一 code 的更新周期即 45 秒；若沿用全局 45 秒阈值，任何一次网络抖动都会把报价判成
+// 停更（零余量），且旧恢复机制还要再等 3 轮。放宽到 150 秒 = 约 3 个周期余量，
+// 既容忍偶发单轮失手，又不至于把真正断流掩盖太久
+export const ITICK_STALE_MS = 150000;
+// end:aigc.
 export const SOURCES = [
   { id: 'rtj', name: '融通金', type: 'websocket', enabled: true },
-  // start:aigc. 2026-10-28 换源：新浪 hq.sinajs.cn 对阿里云机房 IP 整段 403（换域名/EIP 无效），
-  // 引入三个阿里云实测可通的新源；sina 保留（本地开发可用），线上由迁移禁用其映射行
-  { id: 'sina', name: '新浪', type: 'http', enabled: true },
   { id: 'wscn', name: '华尔街见闻', type: 'http', enabled: true },
-  { id: 'tencent', name: '腾讯', type: 'http', enabled: true },
   { id: 'itick', name: 'iTick', type: 'http', enabled: true },
+  // start:aigc. 2026-10-29 第四批退役（§9/§17.2）：sina（机房 403 不可达、沪金/沪银唯一源本就不通）、
+  // tencent、yahoo、frankfurter 不再登记；存量库由 retireSources 迁移归档清理，重启不复活
   // end:aigc.
-  { id: 'yahoo', name: 'Yahoo Finance', type: 'http', enabled: false },
-  { id: 'frankfurter', name: 'Frankfurter', type: 'http', enabled: false },
 ];
 
 // 基础行情：symbol 为统一键；sources 里的 priority 越小优先级越高。
@@ -40,14 +42,12 @@ export const BASE_QUOTES = [
   { symbol: '铂金9995', name: '铂金9995', unit: '元/克', decimals: 2, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'Pt99.95' }] },
   { symbol: '美黄金', name: '美黄金', unit: '美元/盎司', decimals: 1, sources: [
     { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'GLNC' },
-    // start:aigc. 2026-10-28 备援换源：新浪→腾讯 hf_GC（字段同构、日高日低与新浪精确一致，实测时延 10~30s）
-    { sourceId: 'tencent', priority: 2, kind: 'tencent', code: 'hf_GC', staleMs: 20000 },
+    // start:aigc. 2026-10-29 第四批：腾讯备援退役——美黄金/美白银退化为 rtj 单源（§17.2 用户已确认接受）
     // end:aigc.
   ] },
   { symbol: '美白银', name: '美白银', unit: '美元/盎司', decimals: 3, sources: [
     { sourceId: 'rtj', priority: 1, kind: 'plain', code: 'SLNC' },
-    // start:aigc. 2026-10-28 备援换源：新浪→腾讯 hf_SI
-    { sourceId: 'tencent', priority: 2, kind: 'tencent', code: 'hf_SI', staleMs: 20000 },
+    // start:aigc. 2026-10-29 第四批：腾讯备援退役
     // end:aigc.
   ] },
   { symbol: '美铂金', name: '美铂金', unit: '美元/盎司', decimals: 1, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'PLNC' }] },
@@ -60,19 +60,29 @@ export const BASE_QUOTES = [
     // start:aigc. 2026-10-28 换源：新浪 DINIW 机房 403 → 见闻 DXY.OTC（口径与新浪同源，
     // 日高日低精确一致）为主源；iTick DXY 为最终备援（免费版 5 次/分钟限频，口径存在 ~0.3 观测偏差）
     { sourceId: 'wscn', priority: 1, kind: 'wscn', code: 'DXY.OTC' },
-    { sourceId: 'itick', priority: 2, kind: 'itick', code: 'DXY' },
+    { sourceId: 'itick', priority: 2, kind: 'itick', code: 'DXY', staleMs: ITICK_STALE_MS },
     // end:aigc.
   ] },
   { symbol: '美元兑离岸', name: '美元兑离岸人民币', unit: '', decimals: 4, sources: [{ sourceId: 'rtj', priority: 1, kind: 'plain', code: 'USDCNH' }] },
   { symbol: '美元兑港元', name: '美元兑港元', unit: '', decimals: 4, sources: [
     // start:aigc. 2026-10-28 换源：新浪 fx_susdhkd 机房 403 → 见闻 USDHKD.OTC（实时秒级，
-    // 与新浪值基本一致），港金公式（伦敦金×港汇×37.429/31.1034768×0.99）由此复活
+    // 与新浪值基本一致），港金公式（伦敦金×港汇×37.429/31.1034768×0.99）由此复活；
+    // 2026-10-29 第四批：frankfurter 备援退役，退化为 wscn 单源（§17.2 接受）
     { sourceId: 'wscn', priority: 1, kind: 'wscn', code: 'USDHKD.OTC' },
     // end:aigc.
-    { sourceId: 'frankfurter', priority: 2, kind: 'frankfurter' },
   ] },
-  { symbol: '沪金主力', name: '沪金主力', unit: '元/克', decimals: 2, sources: [{ sourceId: 'sina', priority: 1, kind: 'sina', code: 'nf_AU0' }] },
-  { symbol: '沪银主力', name: '沪银主力', unit: '元/千克', decimals: 1, sources: [{ sourceId: 'sina', priority: 1, kind: 'sina', code: 'nf_AG0' }] },
+  // start:aigc. 2026-10-29 沪金/沪银主力复活（iTick 内盘期货）：sina 退役后经实测 iTick
+  // future 端点（region=CN，code=AU/AG）可返回主力连续实时行情——沪金 868.10 与黄金T+D
+  // 867.44 仅差 0.66、沪银 12815 与白银T+D 12857 差 42，量级与口径正确（时间戳为当前时刻）。
+  // 免费版配额 5 次/分钟且按 code 逐条请求：本适配器 3 码共用 45 秒轮询 + 13 秒逐请求间隔（见 itick.mjs）。
+  // 次主力无数据源，不登记（避免页面出现"缺少数据"行）
+  { symbol: '沪金主力', name: '沪金主力', unit: '元/克', decimals: 2, sources: [
+    { sourceId: 'itick', priority: 1, kind: 'itick', code: 'AU', staleMs: ITICK_STALE_MS },
+  ] },
+  { symbol: '沪银主力', name: '沪银主力', unit: '元/千克', decimals: 1, sources: [
+    { sourceId: 'itick', priority: 1, kind: 'itick', code: 'AG', staleMs: ITICK_STALE_MS },
+  ] },
+  // end:aigc.
 ];
 
 // 业务品类：由 Task 4 从 defaults.json 迁移进 SQLite，seed 不硬编码。

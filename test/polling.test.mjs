@@ -116,6 +116,57 @@ test('itick 解析：毫秒时间戳与高低价', () => {
   assert.equal(ticks[0].buy, 101.87); assert.equal(ticks[0].high, 102.2); assert.equal(ticks[0].time, 1793098376000);
 });
 
+test('itick 内盘期货：AU/AG 走 future 端点且 region=CN', async () => {
+  // start:aigc. 2026-10-29 沪金/沪银主力复活：内盘期货必须用 /future 端点 + region=CN，
+  // 且映射正确（sina nf_AU0/nf_AG0 退役后的唯一源）。逐码单启（每适配器独立节奏），
+  // 避开 13 秒逐请求间隔，测试无需真等一个配额周期
+  const firstUrl = async (symbol, code) => {
+    const urls = [];
+    const a = createItickAdapter(bq(symbol, 'itick', code), {
+      token: 't',
+      fetchImpl: async (url) => {
+        urls.push(url);
+        return res(JSON.stringify({ code: 0, data: { s: code, ld: 868.1, h: 875.16, l: 866.82, t: 1793244125224 } }));
+      },
+    });
+    const stop = a.start({ onQuote: () => {}, onFailure: () => {} });
+    await sleep(60); stop(); await sleep(10);
+    return urls[0];
+  };
+  assert.ok((await firstUrl('沪金主力', 'AU')).includes('/future/quote?region=CN&code=AU'), '沪金应走 future/CN');
+  assert.ok((await firstUrl('沪银主力', 'AG')).includes('/future/quote?region=CN&code=AG'), '沪银应走 future/CN');
+  // 对照组：指数仍走 indices/GB，不得被改成 future
+  assert.ok((await firstUrl('美元指数', 'DXY')).includes('/indices/quote?region=GB&code=DXY'), 'DXY 仍走 indices/GB');
+  // end:aigc.
+});
+
+
+test('P2 复审：逐请求最小间隔锁死配额（任意 60s 窗口 ≤5 次）', async () => {
+  // start:aigc. 2026-10-29 P2：3 码背靠背连发 + 45s 周期，60 秒内可发出 6 次，超免费版配额。
+  // 这里按同一比例缩小（窗口 600ms / 间隔 120ms）验证：任意 600ms 半开窗口内最多 5 次
+  const ts = [];
+  const a = createPollingAdapter({
+    id: 'q', name: 'q',
+    baseQuotes: ['A', 'B', 'C'].map((c) => ({ symbol: 'S' + c, enabled: true, sources: [{ sourceId: 'q', code: c, enabled: true }] })),
+    buildQuotes: (list) => Object.fromEntries(list.map((x) => [x.sources[0].code, [{ symbol: x.symbol }]])),
+    requestsFor: (codes) => codes.map((c) => ({ url: 'u' + c, headers: {}, symbols: ['S' + c] })),
+    parseResponse: () => [],
+    intervalMs: 120, minGapMs: 120,
+    fetchImpl: async () => { ts.push(Date.now()); return res('{}'); },
+  });
+  const stop = a.start({ onQuote: () => {}, onFailure: () => {} });
+  await sleep(1500); stop(); await sleep(20);
+  assert.ok(ts.length >= 10, `应持续轮询（实际 ${ts.length} 次）`);
+  let max = 0;
+  for (let i = 0; i < ts.length; i += 1) {
+    let n = 0;
+    for (let j = i; j < ts.length && ts[j] - ts[i] < 600; j += 1) n += 1;
+    if (n > max) max = n;
+  }
+  assert.ok(max <= 5, `任意 600ms 窗口最多 5 次，实测 ${max}`);
+  // end:aigc.
+});
+
 test('运行器：防重叠——慢请求期间并发始终为 1，完成后下一轮继续（R03 修正版）', async () => {
   let inFlight = false, overlaps = 0, started = 0;
   const a = createPollingAdapter({

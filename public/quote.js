@@ -19,11 +19,19 @@ function render(){if(!snapshot)return;const s=snapshot;
  $('connection').hidden=true;
  // end:aigc.
  const fragment=document.createDocumentFragment();for(const r of s.rows){if(hidden.has(r.id))continue;const tr=el('tr',undefined,failed?'stale':'');const name=el('td',undefined,'product');name.append(el('span',r.name));
- // start:aigc. 行内轻量标签：stale 且有原因时显示精简词（不置灰、不弹窗），移动端可见
- // F01：补"引用"类（品类间引用暂不支持），与收盘/单边同为文案映射模式
- if(!failed&&r.stale&&r.reason)name.append(el('span',r.reason.includes('收盘')?'收盘':r.reason.includes('单边')?'单边':r.reason.includes('引用')?'引用':'停更','row-tag'));
+ // 2026-10-29 按要求移除行内文字小标签（停更/收盘/单边/引用）：影响客户观感；
+ // 异常仍通过"缺少数据"按钮（可点击看原因）与整行置灰传达，不加任何显眼字样
+ // start:aigc. 2026-10-29 P2：按钮触发条件从"reason 文案包含缺少"改为**结构化状态判断**——
+ // 后端 reason 文案多种多样（停更/收盘/单边/暂无数据源/品类引用等），靠 includes 匹配会漏判。
+ // 2026-10-29 P2 复审：固定报价（纯数字公式）天然没有 source/sourceMode，不能用"无来源"判定异常，
+ // 只能以"整行四个报价字段全为空"为准；网络级中断另由 failed 兜底。
+ const anyQuoteNull = r => r.buy == null && r.sell == null && r.high == null && r.low == null;
+ const showMissingBtn = failed || anyQuoteNull(r);
+ if (showMissingBtn) {
+   const note=el('button','缺少数据 ⓘ','row-note');note.setAttribute('aria-label',r.name+'行情状态');note.onclick=()=>{$('detail-title').textContent=r.name;$('detail-text').textContent=(failed?'网络已中断，以下是最后收到的价格。':(r.reason||'该品种暂无可用数据源'))+'\n报价更新时间：'+formatTime(r.updatedAt);$('quote-detail').showModal();};name.append(note);}
  // end:aigc.
- if(failed||(r.reason&&r.reason.includes('缺少'))){const note=el('button','缺少数据 ⓘ','row-note');note.setAttribute('aria-label',r.name+'行情状态');note.onclick=()=>{$('detail-title').textContent=r.name;$('detail-text').textContent=(failed?'网络已中断，以下是最后收到的价格。':'该品种暂无可用数据源')+'\n报价更新时间：'+formatTime(r.updatedAt);$('quote-detail').showModal();};name.append(note);}tr.title='报价更新时间：'+formatTime(r.updatedAt);tr.append(name);
+ // 商品名列必须显式 append（"缺少数据"按钮也挂在此单元格内），漏掉会导致整列消失且只剩三列
+ tr.title='报价更新时间：'+formatTime(r.updatedAt);tr.append(name);
  let color='';const midpoint=(Number(r.high)+Number(r.low))/2,main=Number(r.sell??r.buy);if(r.high!=null&&r.low!=null&&(r.sell??r.buy)!=null)color=main>midpoint?'high':main<midpoint?'low':'';
  tr.append(el('td',r.buy??'--',color),el('td',r.sell??'--',color));const range=el('td');range.append(el('div',r.high??'--','high'),el('div',r.low??'--','low'));tr.append(range);fragment.append(tr);}
  $('prices').replaceChildren(fragment);$('empty').hidden=$('prices').children.length>0;
@@ -39,13 +47,27 @@ $('choose').onclick=()=>{choices();$('selection').showModal();};$('all').onclick
 let backoff=0,pollTimer=null,polling=false,lastOkAt=0,rebuildPromise=null,earliestRetryAt=0;
 const jitterDelay=()=>2000+Math.round((Math.random()-0.5)*400); // 均值 2000ms（±10%），消解重启后的同步轮询波
 function schedulePoll(ms){pollTimer=setTimeout(runPoll,ms);}
-// 会话重建任务全页唯一（§6：多个失败不能同时触发大量初始化）；错误携带服务器最早重试时间（AP-02）
+// start:aigc. 统一受限提示（B-02 补充）：boot 初始化封禁、行情 GET 403、401 重建遇封禁三条路径共用
+function showRestricted(){
+  failed=true;if(snapshot)render();
+  $('connection').hidden=false;
+  $('connection').textContent='访问暂受限制，价格已停止更新。约每 30 秒自动探测恢复，解封后无需刷新页面。';
+  $('connection').className='connection warning';
+}
+// end:aigc.
+// 会话重建任务全页唯一（§6：多个失败不能同时触发大量初始化）；错误携带服务器最早重试时间（AP-02）；
+// 403+IP_BLOCKED（第三批 B-02）：标记 blocked，boot/轮询按受限提示处理，Retry-After 由服务端给约 30 秒
 function ensureSession(){
   if(!rebuildPromise)rebuildPromise=fetch('/api/viewer/session',{method:'POST',headers:{'content-type':'application/json'},body:'{}',signal:AbortSignal.timeout(6000)})
     .then(async(response)=>{
       if(!response.ok){
         const retryAfterSec=Number(response.headers.get('retry-after'))||0;
         const err=Error('session:'+response.status);
+        if(response.status===403){
+          let blocked=false;
+          try{blocked=(await response.clone().json()).error==='IP_BLOCKED';}catch{}
+          if(blocked){err.blocked=true;err.retryAfterMs=30000;throw err;} // 封禁：约 30 秒探测，不按剩余时长长等
+        }
         if(retryAfterSec>0)err.retryAfterMs=retryAfterSec*1000;
         throw err;
       }
@@ -71,6 +93,13 @@ async function runPoll(){
     if(response.status===429){ // 服务端已拒绝：保留旧报价并显示访问暂受限制（failed 置灰即停更标识）
       failed=true;render();
       nextMs=Math.max(1,Number(response.headers.get('retry-after'))||2)*1000+Math.round(Math.random()*500);
+    }else if(response.status===403){
+      // 手动封禁（§5，第三批）：403+IP_BLOCKED 走统一受限提示；不发起 401 会话重建、不刷新整页
+      let blocked=false;
+      try{blocked=(await response.clone().json()).error==='IP_BLOCKED';}catch{}
+      if(!blocked)throw Error('http:403');
+      showRestricted();
+      nextMs=30000;
     }else if(!response.ok){
       throw Error('http:'+response.status);
     }else{
@@ -78,8 +107,11 @@ async function runPoll(){
       nextMs=jitterDelay();
     }
   }catch(err){
-    failed=true;if(snapshot)render();else{$('connection').textContent='无法连接行情服务，暂无报价。正在重试…';$('connection').className='connection warning';}
-    nextMs=delayFromError(err);
+    if(err&&err.blocked)showRestricted(); // B-02 补充：401 重建会话遇封禁（ensureSession 抛出）与 GET 403 同提示
+    else{
+      failed=true;if(snapshot)render();else{$('connection').textContent='无法连接行情服务，暂无报价。正在重试…';$('connection').className='connection warning';}
+    }
+    nextMs=delayFromError(err); // blocked 错误携带 30 秒探测间隔
   }
   earliestRetryAt=Date.now()+nextMs; // 记录最早重试时间，供恢复事件判定（AP-02）
   polling=false; // AP-01：统一释放请求标记，保证下一轮可继续
@@ -99,10 +131,13 @@ window.addEventListener('offline',()=>{failed=true;render();});
 // 须先设最早重试时间并退避，期限前不发起行情/二次创建请求，期限后才 runPoll。
 function boot(){
   ensureSession().then(()=>runPoll()).catch((err)=>{
-    failed=true;
-    if(snapshot)render();
-    else{$('connection').textContent='无法连接行情服务，暂无报价。正在重试…';$('connection').className='connection warning';}
-    const nextMs=delayFromError(err); // 携带 Retry-After 时优先遵守，否则按指数退避
+    if(err.blocked)showRestricted(); // B-02 补充：首次打开即被封 → 统一受限提示
+    else{
+      failed=true;
+      if(snapshot)render();
+      if(!snapshot){$('connection').textContent='无法连接行情服务，暂无报价。正在重试…';$('connection').className='connection warning';}
+    }
+    const nextMs=delayFromError(err); // 携带 Retry-After 时优先遵守（封禁为 30 秒），否则按指数退避
     earliestRetryAt=Date.now()+nextMs; // 让到期定时器与 nudge 都遵守该最早时间
     schedulePoll(nextMs);
   });

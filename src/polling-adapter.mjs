@@ -18,6 +18,7 @@ export function createPollingAdapter({
   buildQuotes, requestsFor, parseResponse,
   intervalMs = 15000, timeoutMs = 8000,
   pollMs = null, reqTimeoutMs = null,   // R01：来源级配置覆盖（poll_ms/timeout_ms）
+  minGapMs = 0,            // 2026-10-29 P2：逐请求最小间隔（供应商配额控制，见 itick.mjs）
   fetchImpl = fetch,
   onError = null,          // 可选钩子：(msg) => void，默认 console.error（同错只报一次）
 }) {
@@ -28,8 +29,19 @@ export function createPollingAdapter({
   const interval = pollMs != null ? clampMs(pollMs, 5000, intervalMs) : intervalMs;
   const timeout = reqTimeoutMs != null ? clampMs(reqTimeoutMs, 2000, timeoutMs) : timeoutMs;
   const symbols = [...new Set(codes.flatMap((c) => quoteMap[c].map((q) => q.symbol)))];
-  let stopped = false, timer = null, controller = null, inFlight = false, lastErr = null;
+  let stopped = false, timer = null, controller = null, inFlight = false, lastErr = null, lastReqAt = 0;
   const report = (msg) => { if (onError) onError(msg); else if (msg !== lastErr) console.error(`[${id}] 拉取失败:`, msg); };
+
+  // start:aigc. 2026-10-29 P2（配额）：多码逐条请求时按 minGapMs 拉开发送节奏。
+  // 依据：间隔 Δ 的请求在任意 60s 窗口内最多 floor(60000/Δ)+1 个——取 Δ=13s 时=5，
+  // 恰好卡住"每分钟 5 次"上限；此前 3 码在 45s 周期内背靠背发出，60 秒内可发出 6 次。
+  async function pace() {
+    if (!minGapMs) return;
+    const wait = lastReqAt + minGapMs - Date.now();
+    if (wait > 0) await new Promise((r) => { const t = setTimeout(r, wait); t.unref?.(); });
+    lastReqAt = Date.now();
+  }
+  // end:aigc.
 
   async function poll(handlers) {
     if (stopped || inFlight) return;   // 防重叠：上轮未完成跳过本轮，不排队堆积
@@ -43,6 +55,8 @@ export function createPollingAdapter({
     for (const req of reqs) {
       if (stopped) break;   // 双保险：传输层未响应 abort 时也绝不停后回写（F03 复查点）
       try {
+        await pace();
+        if (stopped) break;   // 间隔等待期间被 stop：零请求零回调
         // 超时与主动停止双通道合并：任一触发即中断在途请求（F03：stop 后零回调）
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)]);
         const r = await fetchImpl(req.url, { headers: req.headers, signal });

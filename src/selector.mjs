@@ -82,11 +82,20 @@ export class Selector {
     entry.tick = tick; entry.err = null;
     if (this._complete(symbol, entry)) entry.complete = tick; // 缓存最新完整组（F02）
     if (entry.status !== HEALTHY) {
-      entry.streak += 1;
-      // 首次连接立即健康；失败后恢复需连续 becomeHealthyAfter 次有效更新
-      if (!entry.everHealthy || entry.streak >= this.becomeHealthyAfter) {
-        entry.status = HEALTHY; entry.everHealthy = true;
+      // start:aigc. 2026-10-29 P2 复审：只对"连接失败"要求连续 becomeHealthyAfter 次确认；
+      // STALE 只是"这轮没更新到"（周期抖动/单次超时），新 tick 一到即恢复健康。
+      // 此前 STALE 与 DISCONNECTED 同走 streak 门槛，45 秒周期下恢复要等 3 轮（135 秒），
+      // 期间报价已在更新却仍显示"停更"——正是复查复现的现象
+      if (entry.status === STALE) {
+        entry.status = HEALTHY; entry.streak = 0;
+      } else {
+        entry.streak += 1;
+        // 首次连接立即健康；失败后恢复需连续 becomeHealthyAfter 次有效更新
+        if (!entry.everHealthy || entry.streak >= this.becomeHealthyAfter) {
+          entry.status = HEALTHY; entry.everHealthy = true;
+        }
       }
+      // end:aigc.
     }
     this._reselect(symbol, now);
   }
