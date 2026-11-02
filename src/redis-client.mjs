@@ -162,6 +162,9 @@ export function createConnectionSupervisor(redis, { minTeardownIntervalMs = 5000
 // 的可重试错误，由上层既有 catch 走降级/401 路径。与脚本预算各自独立计数（两者均有界即可）。
 // 超时错误同样上报 supervisor 主动清队（审查 P2 内存边界）。
 // 二批审查 S2-04：统计读取路径（hgetall/zrange/zcount 等）同样纳入预算，不绕过连接保护。
+// 2026-11-02 补齐 zrangebyscore：access-flush.mjs 汇总流程用 zrangebyscore 扫待交付分钟索引，
+// 缺失时抛 is not a function。本 accessor 只暴露有界直连命令，**不提供 pipeline**——
+// 批量写入统一走 createBatchRunner（分片 + 逐项校验 + 在途有界），避免绕过封装保护。
 export function createBoundedAccessor(redis, { maxConcurrent = 2000, supervisor = null } = {}) {
   let inflight = 0;
   const limit = (name) => async (...args) => {
@@ -172,7 +175,8 @@ export function createBoundedAccessor(redis, { maxConcurrent = 2000, supervisor 
     finally { inflight--; }
   };
   return { get: limit('get'), set: limit('set'), del: limit('del'), zcard: limit('zcard'), zremrangebyscore: limit('zremrangebyscore'), ping: limit('ping'),
-    hgetall: limit('hgetall'), hmget: limit('hmget'), hincrby: limit('hincrby'), hdel: limit('hdel'), expire: limit('expire'), zrange: limit('zrange'), zrevrangebyscore: limit('zrevrangebyscore'), zscore: limit('zscore'), zcount: limit('zcount'), zrem: limit('zrem'), zadd: limit('zadd') };
+    hgetall: limit('hgetall'), hmget: limit('hmget'), hincrby: limit('hincrby'), hdel: limit('hdel'), expire: limit('expire'), zrange: limit('zrange'),
+    zrangebyscore: limit('zrangebyscore'), zrevrangebyscore: limit('zrevrangebyscore'), zscore: limit('zscore'), zcount: limit('zcount'), zrem: limit('zrem'), zadd: limit('zadd') };
 }
 // end:aigc.
 

@@ -8,14 +8,14 @@
 // 汇总失败不影响行情访问控制（§8）：状态上抛给访问管理页显示"汇总延迟"。
 
 export function createAccessFlusher({stats,store,redis,batch,run,intervalMs=60000,retentionDays=7,minuteBatch=60,rowBatch=500,now=Date.now}={}){
+  // 2026-11-02 审查修订：批量落库必须走受限执行器（createBatchRunner：分片 + 逐项校验 + 在途有界）。
+  // 原先的 redis.pipeline() 兼容回退会绕过封装保护，且实际装配/测试均已注入 batch，属死代码，予以移除；
+  // 构造期直接校验，避免漏注入时退化成运行期的 "xxx is not a function" 含糊错误
+  if(typeof batch!=='function')throw new Error('createAccessFlusher 需要注入受限批量执行器 batch');
   const minuteOf=(t)=>Math.floor(t/60000);
   const state={running:false,lastRunAt:0,lastError:null,lastFlushedMinute:0,pendingCount:0,dirtyCount:0,lastCleanupAt:0};
   let timer=null;
-  const runBatch=batch||((cmds)=>{
-    // 未注入 batch runner 时的兼容路径（测试/旧装配）：单 pipeline 一次提交并逐项校验
-    const pl=redis.pipeline();for(const c of cmds)pl[c[0]](...c.slice(1));
-    return pl.exec().then((res)=>{for(const it of res)if(it[0])throw it[0];return res.map((it)=>it[1]);});
-  });
+  const runBatch=batch;
 
   // 分钟写版本 CAS 确认（S2-02 残留）：快照读取时记 ver0，MySQL 提交后原子核对——
   // 版本未变才清 dirty；版本前进=读取/提交期间有并发写入，dirty 必须保留待下轮重扫。
